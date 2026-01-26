@@ -1,50 +1,88 @@
 <?php
-/** CHO Dashboard - displays statistics and charts from database. */
+/** CHO Dashboard - displays statistics and charts based on workflow status */
 session_start();
 require_once __DIR__ . '/../../config/db.php';
 require_once __DIR__ . '/../../config/paths.php';
 
-$username = isset($_SESSION['username']) ? (string) $_SESSION['username'] : null;
-$role = isset($_SESSION['role']) ? (string) $_SESSION['role'] : null;
+// Auth check
+if (!isset($_SESSION['username']) || !in_array($_SESSION['role'] ?? '', ['doctor','CHO','ADMIN'])) {
+    header('Location: ' . APP_BASE_URL . '/backend/auth/login.php');
+    exit;
+}
 
-function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES | ENT_SUBSTITUTE); }
+$username = $_SESSION['username'] ?? 'User';
 
-// Get statistics from database
+function h($s) {
+    return htmlspecialchars((string)$s, ENT_QUOTES | ENT_SUBSTITUTE);
+}
+
+/* ===============================
+   DASHBOARD STATISTICS
+   =============================== */
+
 $stats = [
-    'pwds' => 0,
-    'new' => 0,
-    'renew' => 0,
+    'pwds'    => 0,
+    'new'     => 0,
+    'renew'   => 0,
     'lost_id' => 0
 ];
 
-// Count total approved PWDs (members)
-$pwdRes = @pg_query($conn, "SELECT COUNT(*) FROM application WHERE status = 'Approved'");
+// Official PWD members (FINAL APPROVAL + PWD NUMBER)
+$pwdRes = pg_query($conn, "
+    SELECT COUNT(*)
+    FROM application a
+    JOIN applicant ap ON ap.applicant_id = a.applicant_id
+    WHERE a.workflow_status = 'approved_final'
+      AND ap.pwd_number IS NOT NULL
+");
 if ($pwdRes) {
-    $stats['pwds'] = (int)pg_fetch_result($pwdRes, 0, 0);
+    $stats['pwds'] = (int) pg_fetch_result($pwdRes, 0, 0);
 }
 
-// Count new applications (case-insensitive, cast enum to text)
-$newRes = @pg_query($conn, "SELECT COUNT(*) FROM application WHERE LOWER(application_type::text) = 'new'");
+// Workflow filter visible to CHO
+$workflowStatuses = ['cho_review','cho_accepted','approved_final'];
+$workflowFilter = "('" . implode("','", $workflowStatuses) . "')";
+
+// New applications (CHO side only)
+$newRes = pg_query($conn, "
+    SELECT COUNT(*)
+    FROM application
+    WHERE LOWER(application_type::text) = 'new'
+      AND workflow_status IN $workflowFilter
+");
 if ($newRes) {
-    $stats['new'] = (int)pg_fetch_result($newRes, 0, 0);
+    $stats['new'] = (int) pg_fetch_result($newRes, 0, 0);
 }
 
-// Count renewal applications
-$renewRes = @pg_query($conn, "SELECT COUNT(*) FROM application WHERE LOWER(application_type::text) = 'renewal'");
+// Renewal applications
+$renewRes = pg_query($conn, "
+    SELECT COUNT(*)
+    FROM application
+    WHERE LOWER(application_type::text) = 'renewal'
+      AND workflow_status IN $workflowFilter
+");
 if ($renewRes) {
-    $stats['renew'] = (int)pg_fetch_result($renewRes, 0, 0);
+    $stats['renew'] = (int) pg_fetch_result($renewRes, 0, 0);
 }
 
-// Count lost ID applications
-$lostRes = @pg_query($conn, "SELECT COUNT(*) FROM application WHERE LOWER(application_type::text) = 'lost id'");
+// Lost ID applications
+$lostRes = pg_query($conn, "
+    SELECT COUNT(*)
+    FROM application
+    WHERE LOWER(application_type::text) = 'lost id'
+      AND workflow_status IN $workflowFilter
+");
 if ($lostRes) {
-    $stats['lost_id'] = (int)pg_fetch_result($lostRes, 0, 0);
+    $stats['lost_id'] = (int) pg_fetch_result($lostRes, 0, 0);
 }
 
-// Get monthly data for chart (last 12 months)
+/* ===============================
+   CHART DATA (LAST 12 MONTHS)
+   =============================== */
+
 $chartData = [
-    'new' => array_fill(0, 12, 0),
-    'renew' => array_fill(0, 12, 0),
+    'new'     => array_fill(0, 12, 0),
+    'renew'   => array_fill(0, 12, 0),
     'lost_id' => array_fill(0, 12, 0)
 ];
 $monthLabels = [];
@@ -52,154 +90,125 @@ $monthLabels = [];
 for ($i = 11; $i >= 0; $i--) {
     $date = new DateTime();
     $date->modify("-$i months");
+
     $monthLabels[] = $date->format('M Y');
     $monthStart = $date->format('Y-m-01');
-    $monthEnd = $date->format('Y-m-t');
+    $monthEnd   = $date->format('Y-m-t');
 
     $idx = 11 - $i;
 
-    // New applications for this month
-    $sql = "SELECT COUNT(*) FROM application WHERE LOWER(application_type::text) = 'new' AND application_date BETWEEN '$monthStart' AND '$monthEnd'";
-    $res = @pg_query($conn, $sql);
-    if ($res) $chartData['new'][$idx] = (int)pg_fetch_result($res, 0, 0);
+    // NEW
+    $res = pg_query($conn, "
+        SELECT COUNT(*)
+        FROM application
+        WHERE LOWER(application_type::text) = 'new'
+          AND workflow_status IN $workflowFilter
+          AND application_date BETWEEN '$monthStart' AND '$monthEnd'
+    ");
+    if ($res) $chartData['new'][$idx] = (int) pg_fetch_result($res, 0, 0);
 
-    // Renewal applications for this month
-    $sql = "SELECT COUNT(*) FROM application WHERE LOWER(application_type::text) = 'renewal' AND application_date BETWEEN '$monthStart' AND '$monthEnd'";
-    $res = @pg_query($conn, $sql);
-    if ($res) $chartData['renew'][$idx] = (int)pg_fetch_result($res, 0, 0);
+    // RENEW
+    $res = pg_query($conn, "
+        SELECT COUNT(*)
+        FROM application
+        WHERE LOWER(application_type::text) = 'renewal'
+          AND workflow_status IN $workflowFilter
+          AND application_date BETWEEN '$monthStart' AND '$monthEnd'
+    ");
+    if ($res) $chartData['renew'][$idx] = (int) pg_fetch_result($res, 0, 0);
 
-    // Lost ID applications for this month
-    $sql = "SELECT COUNT(*) FROM application WHERE LOWER(application_type::text) = 'lost id' AND application_date BETWEEN '$monthStart' AND '$monthEnd'";
-    $res = @pg_query($conn, $sql);
-    if ($res) $chartData['lost_id'][$idx] = (int)pg_fetch_result($res, 0, 0);
+    // LOST ID
+    $res = pg_query($conn, "
+        SELECT COUNT(*)
+        FROM application
+        WHERE LOWER(application_type::text) = 'lost id'
+          AND workflow_status IN $workflowFilter
+          AND application_date BETWEEN '$monthStart' AND '$monthEnd'
+    ");
+    if ($res) $chartData['lost_id'][$idx] = (int) pg_fetch_result($res, 0, 0);
 }
 ?>
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CHO Dashboard</title>
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CHO Dashboard</title>
 
-  <!-- Global CSS -->
-  <link rel="stylesheet" href="../../assets/css/global/base.css">
-  <link rel="stylesheet" href="../../assets/css/global/layout.css">
-  <link rel="stylesheet" href="../../assets/css/global/component.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 
+<link rel="stylesheet" href="../../assets/css/global/base.css">
+<link rel="stylesheet" href="../../assets/css/global/layout.css">
+<link rel="stylesheet" href="../../assets/css/global/component.css">
 </head>
+
 <body>
-  <!-- Sidebar -->
-  <div class="sidebar">
+
+<!-- Sidebar -->
+<div class="sidebar">
     <div class="logo">
-      <img src="../../assets/pictures/white.png" alt="logo" width="45">
-      <img src="../../assets/pictures/CHO logo.png" alt="logo 2" width="45">
-      <h4>CHO</h4>
+        <img src="../../assets/pictures/white.png" width="45">
+        <img src="../../assets/pictures/CHO logo.png" width="45">
+        <h4>CHO</h4>
     </div>
     <hr>
 
     <a href="CHO_dashboard.php" class="active">
-      <i class="fas fa-chart-line me-2"></i><span>Dashboard</span>
+        <i class="fas fa-chart-line me-2"></i>Dashboard
     </a>
 
     <a href="members.php">
-      <i class="fas fa-wheelchair me-2"></i><span>Members</span>
+        <i class="fas fa-wheelchair me-2"></i>Members
     </a>
 
     <a href="applications.php">
-      <i class="fas fa-users me-2"></i><span>Applications</span>
+        <i class="fas fa-users me-2"></i>Applications
     </a>
 
     <div class="sidebar-item">
-      <div class="toggle-btn d-flex justify-content-between align-items-center">
-        <span class="no-wrap d-flex align-items-center">
-          <i class="fas fa-folder me-2"></i><span>Manage Applications</span>
-        </span>
-        <i class="fas fa-chevron-down chevron-icon"></i>
-      </div>
-
-      <div class="submenu">
-        <a href="accepted.php" class="submenu-link d-flex align-items-center ps-4"
-           style="padding-top: 3px; padding-bottom: 3px; margin: 5px 0;">
-          <span class="icon" style="width: 18px;"><i class="fas fa-user-check"></i></span>
-          <span class="ms-2">Accepted</span>
-        </a>
-
-        <a href="pending.php" class="submenu-link d-flex align-items-center ps-4"
-           style="padding-top: 3px; padding-bottom: 3px; margin: 5px 0;">
-          <span class="icon" style="width: 18px;"><i class="fas fa-hourglass-half"></i></span>
-          <span class="ms-2">Pending</span>
-        </a>
-
-        <a href="denied.php" class="submenu-link d-flex align-items-center ps-4"
-           style="padding-top: 3px; padding-bottom: 3px; margin: 5px 0;">
-          <span class="icon" style="width: 18px;"><i class="fas fa-user-times"></i></span>
-          <span class="ms-2">Denied</span>
-        </a>
-      </div>
+        <div class="toggle-btn d-flex justify-content-between align-items-center">
+            <span><i class="fas fa-folder me-2"></i>Manage Applications</span>
+            <i class="fas fa-chevron-down chevron-icon"></i>
+        </div>
+        <div class="submenu">
+            <a href="accepted.php"><i class="fas fa-user-check me-2"></i>Accepted</a>
+            <a href="pending.php"><i class="fas fa-hourglass-half me-2"></i>Pending</a>
+            <a href="denied.php"><i class="fas fa-user-times me-2"></i>Denied</a>
+        </div>
     </div>
 
     <a href="logout.php">
-      <i class="fas fa-sign-out-alt me-2"></i><span>Logout</span>
+        <i class="fas fa-sign-out-alt me-2"></i>Logout
     </a>
+</div>
 
-  </div>
+<div class="main">
 
-  <div class="main">
-    <div class="topbar d-flex justify-content-between align-items-center">
-      <div class="d-flex align-items-center">
-        <div class="toggle-btn" onclick="toggleSidebar()">
-          <i class="fas fa-bars"></i>
-        </div>
-      </div>
-
-      <div class="d-flex flex-column align-items-end">
-        <div class="d-flex align-items-center ms-3 mt-2 mb-2" style="font-size: 1.4rem;">
-          <strong><?= h($username ?? 'User') ?></strong>
-          <i class="fas fa-user-circle ms-3 me-2 mb-2 mt-2" style="font-size: 2.5rem;"></i>
-        </div>
-      </div>
+<div class="topbar d-flex justify-content-between align-items-center">
+    <div class="toggle-btn" onclick="toggleSidebar()">
+        <i class="fas fa-bars"></i>
     </div>
-
-    <div class="cards">
-      <div class="card-stat">
-        <div>
-          <small>PWDs</small>
-          <h3><?= $stats['pwds'] ?></h3>
-        </div>
-        <i class="fas fa-users"></i>
-      </div>
-      <div class="card-stat">
-        <div>
-          <small>NEW</small>
-          <h3><?= $stats['new'] ?></h3>
-        </div>
-        <i class="fas fa-user-plus"></i>
-      </div>
-      <div class="card-stat">
-        <div>
-          <small>RENEW</small>
-          <h3><?= $stats['renew'] ?></h3>
-        </div>
-        <i class="fas fa-id-card"></i>
-      </div>
-      <div class="card-stat">
-        <div>
-          <small>LOST ID</small>
-          <h3><?= $stats['lost_id'] ?></h3>
-        </div>
-        <i class="fas fa-id-badge"></i>
-      </div>
+    <div class="d-flex align-items-center">
+        <strong><?= h($username) ?></strong>
+        <i class="fas fa-user-circle ms-3" style="font-size:2.5rem"></i>
     </div>
+</div>
 
-    <div class="chart-container">
-      <canvas id="statsChart"></canvas>
-    </div>
-  </div>
+<div class="cards">
+    <div class="card-stat"><small>PWDs</small><h3><?= $stats['pwds'] ?></h3></div>
+    <div class="card-stat"><small>NEW</small><h3><?= $stats['new'] ?></h3></div>
+    <div class="card-stat"><small>RENEW</small><h3><?= $stats['renew'] ?></h3></div>
+    <div class="card-stat"><small>LOST ID</small><h3><?= $stats['lost_id'] ?></h3></div>
+</div>
 
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<div class="chart-container">
+    <canvas id="statsChart"></canvas>
+</div>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script>
     const ctx = document.getElementById('statsChart');
     ctx.height = 460;

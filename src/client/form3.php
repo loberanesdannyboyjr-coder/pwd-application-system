@@ -22,6 +22,13 @@ $_SESSION['application_type'] = $type;
 $step = 3;
 $draftData = loadDraftData($step, $application_id);
 
+// 🔒 LOCK FORM IF ALREADY SUBMITTED
+if (($draftData['workflow_status'] ?? 'draft') !== 'draft') {
+    http_response_code(403);
+    exit('Application already submitted. Editing is disabled.');
+}
+
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     saveDraftData($step, $_POST, $application_id);
 
@@ -31,6 +38,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     header("Location: form4.php?type=" . urlencode($type));
     exit;
+}
+
+$currentStep = 3;
+
+// Initialize max_step if not set
+$_SESSION['max_step'] = $_SESSION['max_step'] ?? 1;
+
+// Update max_step (never go backwards)
+if ($_SESSION['max_step'] < $currentStep) {
+    $_SESSION['max_step'] = $currentStep;
 }
 
 ?>
@@ -47,17 +64,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   <?php include __DIR__ . '/../../hero/navbar.php'; ?>
 
   <div class="form-header">
-    <h1 class="form-title">PWD Application Form - Step 3</h1>
-    <div class="step-indicator-wrapper">
-      <div class="step-indicator">
-        <div class="step"><div class="circle">1</div><div class="label">Personal Information</div></div>
-        <div class="step"><div class="circle">2</div><div class="label">Affiliation Section</div></div>
-        <div class="step active"><div class="circle">3</div><div class="label">Approval Section</div></div>
-        <div class="step"><div class="circle">4</div><div class="label">Upload Documents</div></div>
-        <div class="step"><div class="circle">5</div><div class="label">Submission Complete</div></div>
-      </div>
+    <h1 class="form-title">PWD Application Form</h1>
+    <div class="step-indicator">
+
+      <a href="#" class="step <?= $currentStep === 1 ? 'active' : '' ?>" data-step="1">
+        <div class="circle">1</div>
+        <div class="label">Personal Information</div>
+      </a>
+
+      <a href="#" class="step <?= $currentStep === 2 ? 'active' : '' ?>" data-step="2">
+        <div class="circle">2</div>
+        <div class="label">Affiliation Section</div>
+      </a>
+
+      <a href="#" class="step <?= $currentStep === 3 ? 'active' : '' ?>" data-step="3">
+        <div class="circle">3</div>
+        <div class="label">Approval Section</div>
+      </a>
+
+      <a href="#" class="step <?= $currentStep === 4 ? 'active' : '' ?>" data-step="4">
+        <div class="circle">4</div>
+        <div class="label">Upload Documents</div>
+      </a>
+
+      <a href="#" class="step <?= $currentStep === 5 ? 'active' : '' ?>" data-step="5">
+        <div class="circle">5</div>
+        <div class="label">Submission Complete</div>
+      </a>
+
     </div>
-  </div>
 
   <div class="form-container">
     <form method="POST">
@@ -109,29 +144,95 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </div>
       </div>
 
-      <!-- Emergency Contact Section -->
-      <div class="mb-3 border-start border-4 border-primary bg-light rounded p-2 ps-3 fw-semibold text-primary">
-        IN CASE OF EMERGENCY
+    <!-- Emergency Contact Section -->
+    <div class="mb-3 border-start border-4 border-primary bg-light rounded p-2 ps-3 fw-semibold text-primary">
+      IN CASE OF EMERGENCY
+    </div>
+
+    <div class="row g-3 mb-4">
+      <div class="col-md-6">
+        <label class="form-label fw-semibold required">
+          Contact Person’s Name
+        </label>
+        <input
+          type="text"
+          class="form-control"
+          name="contact_person_name"
+          required
+          value="<?= htmlspecialchars($draftData['contact_person_name'] ?? '') ?>">
       </div>
 
-      <div class="row g-3 mb-4">
-        <div class="col-md-6">
-          <label class="form-label">Contact Person’s Name:</label>
-          <input type="text" class="form-control" name="contact_person_name"
-            value="<?= htmlspecialchars($draftData['contact_person_name'] ?? '') ?>">
-        </div>
-        <div class="col-md-6">
-          <label class="form-label">Contact Person’s No.:</label>
-          <input type="text" class="form-control" name="contact_person_no"
-            value="<?= htmlspecialchars($draftData['contact_person_no'] ?? '') ?>">
-        </div>
-      </div>
+    <div class="col-md-6">
+      <label class="form-label fw-semibold required">
+        Contact Person’s No.
+      </label>
+      <input
+        type="tel"
+        class="form-control"
+        name="contact_person_no"
+        required
+        inputmode="numeric"
+        pattern="[0-9]{11}"
+        maxlength="11"
+        placeholder="09XXXXXXXXX"
+        title="Please enter an 11-digit mobile number"
+        value="<?= htmlspecialchars($draftData['contact_person_no'] ?? '') ?>">
+          </div>
+    </div>
+
 
       <!-- Navigation Buttons -->
       <div class="d-flex justify-content-between">
   <button type="submit" name="nav" value="back" class="btn btn-outline-primary">Back</button>
   <button type="submit" name="nav" value="next" class="btn btn-primary px-4">Next</button>
 </div>
+
+<script>
+document.querySelectorAll('.step').forEach(step => {
+  step.addEventListener('click', function (e) {
+    e.preventDefault();
+
+    const targetStep = parseInt(this.dataset.step, 10);
+    const maxAllowedStep = <?= (int)($_SESSION['max_step'] ?? 1) ?>;
+
+    // 🚫 Prevent skipping ahead
+    if (targetStep > maxAllowedStep) {
+      alert('Please complete the previous step first.');
+      return;
+    }
+
+    // ✅ Navigate
+    window.location.href = `form${targetStep}.php?type=<?= htmlspecialchars($_SESSION['application_type']) ?>`;
+  });
+});
+</script>
+
+
+<style>
+
+.required::after {
+  content: " *";
+  color: #dc3545;
+  font-weight: bold;
+}
+.step {
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.step:hover,
+.step:visited,
+.step:active {
+  text-decoration: none;
+  color: inherit;
+}
+
+</style>
+
+
+
+
 
     </form>
   </div>

@@ -121,6 +121,21 @@ function normalize_row(array $row): array {
     return $out;
 }
 
+function workflow_label(string $status): string {
+    switch (strtolower($status)) {
+        case 'draft':        return 'DRAFT';
+        case 'submitted':    return 'SUBMITTED';
+        case 'pdao_review':  return 'PDAO REVIEW';
+        case 'cho_review':   return 'CHO REVIEW';
+        case 'approved':     return 'ACCEPTED';
+        case 'verified':     return 'ACCEPTED';
+        case 'rejected':
+        case 'pdao_rejected':return 'FEEDBACK';
+        default:             return strtoupper($status);
+    }
+}
+
+
 /* ---------------- build $draftData (priority: drafts -> applicant -> application -> docs) ------------------ */
 $normalizedDraft = [];
 foreach ($draft_json_merged as $k => $v) {
@@ -132,6 +147,38 @@ $normalizedApp = normalize_row($application ?: []);
 $normalizedDocs = normalize_row($docs ?: []);
 
 $draftData = array_merge($normalizedApp, $normalizedDocs, $normalizedDraft);
+
+/* ===============================
+   PDAO VIEW — REMOVE MEDICAL DATA
+   =============================== */
+
+$medicalKeys = [
+    // diagnosis / medical info
+    'diagnosis',
+    'medical_condition',
+    'medical_findings',
+    'cause_of_disability',
+    'impairment_type',
+
+    // CHO assessment fields
+    'cho_remarks',
+    'cho_findings',
+    'cho_assessment',
+    'cho_recommendation',
+    'cho_physician',
+    'cho_license_no',
+
+    // medical certificate metadata
+    'medical_certificate_no',
+    'medical_certificate_date',
+    'hospital_name',
+    'physician_name'
+];
+
+foreach ($medicalKeys as $key) {
+    unset($draftData[$key]);
+}
+
 
 // compatibility aliases
 if (empty($draftData['application_type']) && !empty($application['application_type'])) $draftData['application_type'] = $application['application_type'];
@@ -177,13 +224,14 @@ foreach ($autoMap as $target => $variants) {
 /* ---------- build draftData['files'] but EXCLUDE the 1x1 pic from the files list ---------- */
 $draftData['files'] = [];
 $map_docs = [
-    'bodypic_path'    => 'Whole Body Picture',
-    'medicalcert_path'=> 'Medical Certificate',
-    'barangaycert_path'=> 'Barangay Certificate',
-    'old_pwd_id_path' => 'Old PWD ID',
-    'affidavit_loss_path' => 'Affidavit of Loss',
-    'cho_cert_path'   => 'CHO Certificate'
+    'bodypic_path'       => 'Whole Body Picture',
+    'barangaycert_path' => 'Barangay Certificate',
+    'old_pwd_id_path'   => 'Old PWD ID',
+    'affidavit_loss_path' => 'Affidavit of Loss'
+    // medicalcert_path REMOVED for PDAO
+    // cho_cert_path REMOVED for PDAO
 ];
+
 if ($docs) {
     foreach ($map_docs as $col => $label) {
         if (!empty($docs[$col])) {
@@ -198,18 +246,35 @@ if ($docs) {
         }
     }
 }
-$fileCandidates = ['bodypic_path','bodypic','file_path','file','attachment_path','attachment','document_path','medicalcert_path','barangaycert_path','old_pwd_id_path','affidavit_loss_path'];
+$fileCandidates = [
+    'bodypic_path',
+    'bodypic',
+    'file_path',
+    'file',
+    'attachment_path',
+    'attachment',
+    'document_path',
+    'barangaycert_path',
+    'old_pwd_id_path',
+    'affidavit_loss_path'
+    // medicalcert_path REMOVED for PDAO
+];
 foreach ($fileCandidates as $c) {
     if (!empty($draftData[$c])) {
         $stored = $draftData[$c];
         $basename = basename(parse_url($stored, PHP_URL_PATH) ?: $stored);
+
         $exists = false;
         foreach ($draftData['files'] as $f) {
-            if (basename($f['path']) === $basename) { $exists = true; break; }
+            if (basename($f['path']) === $basename) {
+                $exists = true;
+                break;
+            }
         }
         if ($exists) continue;
+
         $draftData['files'][] = [
-            'label' => ucfirst(str_replace('_',' ',$c)),
+            'label' => ucfirst(str_replace('_',' ', $c)),
             'path'  => $stored,
             'url'   => build_url_from_stored($stored),
             'server_candidates' => server_path_candidates($stored),
@@ -217,6 +282,12 @@ foreach ($fileCandidates as $c) {
         ];
     }
 }
+
+$draftData['files'] = array_filter(
+    $draftData['files'],
+    fn($f) => stripos($f['label'], 'medical') === false
+);
+
 
 /* ---------- determine header pic (prefers docs.pic_1x1_path then application.pic_1x1_path or draft json) ---------- */
 $pic_candidate = '';
@@ -323,6 +394,8 @@ if (!empty($_GET['debug']) && !empty($_SESSION['is_admin'])) {
   <title>Applicant Profile — <?= h(($draftData['last_name'] ?? '') . ', ' . ($draftData['first_name'] ?? '')) ?></title>
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons/font/bootstrap-icons.css" rel="stylesheet">
+
   <style>
     body{background:#f6f7f9}
     .form-summary .form-control.bg-light{ background:#f8f9fa; border:1px solid #e1e5ea; color:#212529; }
@@ -330,6 +403,9 @@ if (!empty($_GET['debug']) && !empty($_SESSION['is_admin'])) {
     .files-list { margin-top: .6rem; }
     .files-list li { display:flex; align-items:center; justify-content:space-between; padding:.45rem .5rem; border-bottom:1px solid #eef0f3; }
     .card-body .mt-4.border-top { margin-top:1.8rem; }
+
+ <?php include __DIR__ . '/../../hero/navbar_admin.php'; ?>
+
   </style>
 </head>
 <body>
@@ -341,8 +417,7 @@ if (!empty($_GET['debug']) && !empty($_SESSION['is_admin'])) {
            style="background: linear-gradient(90deg, #2d6be6, #5b9df7); color: #fff;">
         
         <div>
-          <h5 class="mb-0 text-white">Applicant Profile</h5>
-          <small class="text-white-50">
+          <small class="text-white-100">
             Review of application #
             <?= h($application['application_number'] ?? ('PWD-'.date('Y').'-'.str_pad($app_id,5,'0',STR_PAD_LEFT))) ?>
           </small>
@@ -364,7 +439,9 @@ if (!empty($_GET['debug']) && !empty($_SESSION['is_admin'])) {
               default:                $badgeClass = 'bg-secondary'; break;
             }
           ?>
-          <span class="badge <?= h($badgeClass) ?> me-3"><?= h($wf) ?></span>
+<span class="badge <?= h($badgeClass) ?> me-3">
+  <?= h(workflow_label((string)$wf)) ?>
+</span>
 
           <?php if (!empty($draftData['pic_url'])):
               // clickable header photo -> opens via this page's file serving if possible (use basename)
@@ -395,48 +472,7 @@ if (!empty($_GET['debug']) && !empty($_SESSION['is_admin'])) {
             }
         ?>
 
-        <!-- Application History (AJAX) -->
-<?php
-// -------- server-side render of application history (replace AJAX) --------
-echo '<div class="mt-4">';
-echo '<div class="card"><div class="card-body"><h6 class="card-title">Application History</h6>';
-
-$hist_sql = "SELECT hist_id, from_status, to_status, changed_by, role, remarks, created_at
-             FROM application_status_history
-             WHERE application_id = $1
-             ORDER BY created_at ASC";
-$hist_res = @pg_query_params($conn, $hist_sql, [$app_id]);
-
-if ($hist_res === false) {
-    // DB error - show friendly message and log
-    error_log('get_application_history error: ' . pg_last_error($conn));
-    echo '<div class="text-danger small">Unable to load history (server error).</div>';
-} else {
-    $rows = pg_fetch_all($hist_res);
-    if (empty($rows)) {
-        echo '<div class="text-muted small">No history available.</div>';
-    } else {
-        echo '<ul class="list-unstyled mb-0">';
-        foreach ($rows as $h) {
-            $when = !empty($h['created_at']) ? htmlspecialchars((string)$h['created_at']) : '';
-            $from = htmlspecialchars($h['from_status'] ?? '-');
-            $to   = htmlspecialchars($h['to_status'] ?? '-');
-            $who  = '';
-            if (!empty($h['changed_by'])) $who = ' by ' . htmlspecialchars($h['changed_by']);
-            if (!empty($h['role'])) $who .= ' (' . htmlspecialchars($h['role']) . ')';
-            $remarks = !empty($h['remarks']) ? '<div class="small text-muted mt-1">Remarks: ' . nl2br(htmlspecialchars($h['remarks'])) . '</div>' : '';
-            echo '<li class="mb-3"><strong>' . $when . '</strong> — ' . $from . ' → ' . $to . $who . $remarks . '</li>';
-        }
-        echo '</ul>';
-    }
-}
-echo '</div></div>';
-echo '</div>';
-// -------- end server-side history render --------
-?>
-
-
-           <!-- PDAO action form -> use api/admin_action.php -->
+<!-- PDAO action form -> use api/admin_action.php -->
 <div class="mt-4 border-top pt-3">
 <form id="pdao-action-form" method="post" action="<?= h(rtrim(APP_BASE_URL, '/') . '/api/admin_action.php') ?>">
     <input type="hidden" name="application_id" value="<?= h($app_id) ?>">
@@ -444,17 +480,49 @@ echo '</div>';
     <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token']) ?>">
 
     <div class="mb-3">
-    <label>Remarks (optional — required when rejecting / requesting info)</label>
-    <textarea id="pdao-remarks" name="remarks" class="form-control" rows="3" placeholder="Enter remarks..."></textarea>
+        <label class="form-label">
+            Remarks (optional — required when rejecting / requesting info)
+        </label>
+        <textarea id="pdao-remarks"
+                  name="remarks"
+                  class="form-control"
+                  rows="3"
+                  placeholder="Enter remarks..."></textarea>
     </div>
 
-    <button type="button" class="btn btn-primary" data-action="forward_to_cho">Forward to CHO</button>
-    <button type="button" class="btn btn-warning" data-action="request_more_info">Request More Info</button>
-    <button type="button" class="btn btn-danger" data-action="reject">Reject</button>
+<!-- BUTTON ROW (RIGHT-ALIGNED WITH ICONS) -->
+<div class="d-flex justify-content-end gap-2">
 
-    <a href="<?= h(rtrim(APP_BASE_URL, '/') . '/src/admin_side/application_review.php') ?>" class="btn btn-outline-secondary ms-2">Back to list</a>
+ <!-- Reject -->
+    <button type="button"
+            class="btn btn-danger"
+            data-action="reject">
+        <i class="bi bi-x-circle-fill me-1"></i>
+        Reject
+    </button>
+    
+
+    <!-- Request More Info -->
+    <button type="button"
+            class="btn btn-warning"
+            data-action="request_more_info">
+        <i class="bi bi-info-circle-fill me-1"></i>
+        Request More Info
+    </button>
+
+      <!-- Forward to CHO (Approve) -->
+    <button type="button"
+            class="btn btn-success"
+            data-action="forward_to_cho">
+        <i class="bi bi-check-circle-fill me-1"></i>
+        Forward to CHO
+    </button>
+   
+</div>
+
 </form>
 </div>
+
 
 <script>
 document.querySelectorAll('#pdao-action-form button[data-action]').forEach(btn=>{

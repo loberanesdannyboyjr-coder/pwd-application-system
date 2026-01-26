@@ -19,7 +19,7 @@ if (!in_array($type, $valid, true)) {
 
 // Always create a new draft application row
 $result = pg_query_params($conn,
-    "INSERT INTO application (applicant_id, application_type, status, created_at)
+    "INSERT INTO application (applicant_id, appl    ication_type, status, created_at)
      VALUES ($1, $2, 'draft', NOW()) RETURNING application_id",
     [$applicant_id, $type]
 );

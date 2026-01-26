@@ -1,5 +1,5 @@
 <?php
-/** Displays all accepted/approved CHO applications with search, barangay filter, and pagination. */
+/** Displays medically accepted CHO applications with search, barangay filter, and pagination */
 session_start();
 require_once __DIR__ . '/../../config/db.php';
 require_once __DIR__ . '/../../config/paths.php';
@@ -25,14 +25,15 @@ $page = max(1, (int)($_GET['page'] ?? 1));
 $limit = 10;
 $offset = ($page - 1) * $limit;
 
-// Build query for accepted applications - get barangay from draft data (step 1)
+/* ===============================
+   MAIN QUERY — CHO ACCEPTED ONLY
+   =============================== */
 $baseSql = "
     SELECT
         a.application_id,
         a.application_date,
-        a.status,
         a.application_type,
-        a.applicant_id,
+        a.workflow_status,
         COALESCE(ap.pwd_number, '') AS pwd_number,
         COALESCE(d.data->>'barangay', ap.barangay, '') AS barangay,
         COALESCE(d.data->>'last_name', ap.last_name, '') AS last_name,
@@ -40,19 +41,28 @@ $baseSql = "
         COALESCE(d.data->>'middle_name', ap.middle_name, '') AS middle_name
     FROM application a
     JOIN applicant ap ON ap.applicant_id = a.applicant_id
-    LEFT JOIN application_draft d ON d.application_id = a.application_id AND d.step = 1
-    WHERE a.status = 'Approved'
+    LEFT JOIN application_draft d
+        ON d.application_id = a.application_id
+        AND d.step = 1
+    WHERE a.workflow_status = 'cho_accepted'
 ";
 
 $params = [];
 $conds = [];
 
+// Search
 if ($search !== '') {
-    $s = '%' . str_replace('%', '\\%', $search) . '%';
-    $conds[] = "(COALESCE(d.data->>'last_name', ap.last_name) ILIKE $1 OR COALESCE(d.data->>'first_name', ap.first_name) ILIKE $1 OR ap.pwd_number ILIKE $1 OR COALESCE(d.data->>'barangay', ap.barangay) ILIKE $1)";
-    $params[] = $s;
+    $idx = '$' . (count($params) + 1);
+    $conds[] = "(
+        COALESCE(d.data->>'last_name', ap.last_name) ILIKE {$idx}
+        OR COALESCE(d.data->>'first_name', ap.first_name) ILIKE {$idx}
+        OR COALESCE(d.data->>'barangay', ap.barangay) ILIKE {$idx}
+        OR ap.pwd_number ILIKE {$idx}
+    )";
+    $params[] = '%' . str_replace('%', '\\%', $search) . '%';
 }
 
+// Barangay filter
 if ($barangayFilter !== '') {
     $idx = '$' . (count($params) + 1);
     $conds[] = "COALESCE(d.data->>'barangay', ap.barangay) = {$idx}";
@@ -63,20 +73,34 @@ if (!empty($conds)) {
     $baseSql .= ' AND ' . implode(' AND ', $conds);
 }
 
-// Count total for pagination
-$countSql = "SELECT COUNT(*) as total FROM application a JOIN applicant ap ON ap.applicant_id = a.applicant_id LEFT JOIN application_draft d ON d.application_id = a.application_id AND d.step = 1 WHERE a.status = 'Approved'";
+/* ===============================
+   COUNT QUERY (MATCHES MAIN)
+   =============================== */
+$countSql = "
+    SELECT COUNT(*) AS total
+    FROM application a
+    JOIN applicant ap ON ap.applicant_id = a.applicant_id
+    LEFT JOIN application_draft d
+        ON d.application_id = a.application_id
+        AND d.step = 1
+    WHERE a.workflow_status = 'cho_accepted'
+";
+
 if (!empty($conds)) {
     $countSql .= ' AND ' . implode(' AND ', $conds);
 }
 
-$countRes = !empty($params) ? @pg_query_params($conn, $countSql, $params) : @pg_query($conn, $countSql);
+$countRes = !empty($params)
+    ? pg_query_params($conn, $countSql, $params)
+    : pg_query($conn, $countSql);
+
 $total = $countRes ? (int)pg_fetch_result($countRes, 0, 0) : 0;
 $totalPages = max(1, (int)ceil($total / $limit));
 
-// Add pagination
-$baseSql .= " ORDER BY a.application_date DESC LIMIT $limit OFFSET $offset";
-
-$res = !empty($params) ? @pg_query_params($conn, $baseSql, $params) : @pg_query($conn, $baseSql);
+$baseSql .= " ORDER BY a.application_date DESC LIMIT {$limit} OFFSET {$offset}";
+$res = !empty($params)
+    ? pg_query_params($conn, $baseSql, $params)
+    : pg_query($conn, $baseSql);
 
 $rows = [];
 $dbErr = null;
@@ -86,17 +110,21 @@ if ($res === false) {
     while ($r = pg_fetch_assoc($res)) $rows[] = $r;
 }
 
-// Get all barangays for filter dropdown - from both applicant table and draft data
+/* ===============================
+   BARANGAY DROPDOWN
+   =============================== */
 $barangaySql = "
     SELECT DISTINCT COALESCE(d.data->>'barangay', ap.barangay) AS barangay
     FROM application a
     JOIN applicant ap ON ap.applicant_id = a.applicant_id
-    LEFT JOIN application_draft d ON d.application_id = a.application_id AND d.step = 1
+    LEFT JOIN application_draft d
+        ON d.application_id = a.application_id
+        AND d.step = 1
     WHERE COALESCE(d.data->>'barangay', ap.barangay) IS NOT NULL
-    AND COALESCE(d.data->>'barangay', ap.barangay) != ''
+      AND COALESCE(d.data->>'barangay', ap.barangay) != ''
     ORDER BY barangay
 ";
-$barangayRes = @pg_query($conn, $barangaySql);
+$barangayRes = pg_query($conn, $barangaySql);
 $barangays = [];
 if ($barangayRes) {
     while ($b = pg_fetch_assoc($barangayRes)) {
@@ -117,6 +145,7 @@ if ($barangayRes) {
     <link rel="stylesheet" href="../../assets/css/global/component.css">
 </head>
 <body>
+
     <!-- Sidebar -->
     <div class="sidebar">
         <div class="logo">
@@ -219,7 +248,10 @@ if ($barangayRes) {
                 </div>
 
                 <div class="d-flex align-items-center">
-                    <span class="badge text-white text-center" style="font-size: 1rem; width: 100px; padding: 0.5rem 0; background-color: #22c55e;">Accepted</span>
+                    <span class="badge text-white text-center"
+                        style="font-size: 0.85rem; min-width: 130px; padding: 0.5rem 0.75rem; background-color: #14b8a6;">
+                        MEDICALLY ACCEPTED
+                    </span>
                     <a href="<?= h($viewUrl) ?>" class="view-link text-primary text-decoration-none">
                         <i class="fas fa-eye me-1 ms-5"></i> View Applicant
                     </a>

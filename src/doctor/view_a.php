@@ -97,6 +97,9 @@ if (!$row) {
 }
 $application = $row;
 
+$currentWorkflow = $application['workflow_status'] ?? 'draft';
+
+
 /* ---------------- documentrequirements ------------------ */
 $docs = null;
 $docs_sql = "SELECT * FROM documentrequirements WHERE application_id = $1 LIMIT 1";
@@ -219,7 +222,6 @@ if (!empty($_GET['file_action']) && in_array($_GET['file_action'], ['view','down
 }
 
 
-/* ---------- server-side application history ---------- */
 $hist_sql = "SELECT hist_id, from_status, to_status, changed_by, role, remarks, created_at
              FROM application_status_history
              WHERE application_id = $1
@@ -252,7 +254,19 @@ $history_rows = $hist_res && pg_num_rows($hist_res) ? pg_fetch_all($hist_res) : 
           <small class="text-white-50">Review of application # <?= h($application['application_number'] ?? ('PWD-'.date('Y').'-'.str_pad($app_id,5,'0',STR_PAD_LEFT))) ?></small>
         </div>
         <div>
-          <span class="badge bg-secondary"><?= h($application['status'] ?? ($application['workflow_status'] ?? 'Pending')) ?></span>
+                  <?php
+          $badgeMap = [
+              'cho_review'     => 'warning',
+              'cho_accepted'   => 'success',
+              'approved_final' => 'primary',
+              'cho_rejected'   => 'danger'
+          ];
+          $badgeClass = $badgeMap[$currentWorkflow] ?? 'secondary';
+          ?>
+          <span class="badge bg-<?= $badgeClass ?>">
+
+          <?= h(strtoupper(str_replace('_',' ', $currentWorkflow))) ?>
+        </span>
         </div>
       </div>
 
@@ -267,36 +281,12 @@ $history_rows = $hist_res && pg_num_rows($hist_res) ? pg_fetch_all($hist_res) : 
         }
         ?>
 
-        <!-- Application History -->
-        <div class="mt-4">
-          <div class="card">
-            <div class="card-body">
-              <h6 class="card-title">Application History</h6>
-              <?php if (empty($history_rows)): ?>
-                <div class="text-muted small">No history available.</div>
-              <?php else: ?>
-                <ul class="list-unstyled mb-0">
-                  <?php foreach ($history_rows as $h): 
-                    $when = !empty($h['created_at']) ? h($h['created_at']) : '';
-                    $from = h($h['from_status'] ?? '-');
-                    $to = h($h['to_status'] ?? '-');
-                    $who = '';
-                    if (!empty($h['changed_by'])) $who = ' by ' . h($h['changed_by']);
-                    if (!empty($h['role'])) $who .= ' (' . h($h['role']) . ')';
-                    $remarks = !empty($h['remarks']) ? '<div class="small text-muted mt-1">Remarks: ' . nl2br(h($h['remarks'])) . '</div>' : '';
-                  ?>
-                    <li class="mb-3"><strong><?= $when ?></strong> — <?= $from ?> → <?= $to ?><?= $who ?> <?= $remarks ?></li>
-                  <?php endforeach; ?>
-                </ul>
-              <?php endif; ?>
-            </div>
-          </div>
-        </div>
-
         <!-- CHO action form -->
         <?php
-        $currentStatus = $application['status'] ?? 'Pending';
-        $canTakeAction = !in_array($currentStatus, ['Approved', 'Denied', 'CHO Rejected', 'CHO Verified']);
+                $canTakeAction = (
+            $currentWorkflow === 'cho_review'
+            && in_array($session_role, ['CHO','ADMIN'], true)
+        );
         ?>
         <?php if ($canTakeAction): ?>
         <form id="cho-action-form" method="post" action="<?= h((defined('APP_BASE_URL') ? rtrim(APP_BASE_URL, '/') : '') . '/api/admin_action.php') ?>" class="mt-4">
@@ -308,7 +298,9 @@ $history_rows = $hist_res && pg_num_rows($hist_res) ? pg_fetch_all($hist_res) : 
           </div>
 
           <div class="d-flex align-items-center">
-            <button type="button" class="btn btn-success me-2" data-action="cho_verify">Verify (confirm PWD)</button>
+          <button type="button" class="btn btn-success me-2" data-action="cho_verify">
+            Accept (Medical Assessment Passed)
+          </button>
             <button type="button" class="btn btn-danger me-2" data-action="cho_reject">Reject</button>
             <a href="<?= h((defined('APP_BASE_URL') ? rtrim(APP_BASE_URL, '/') : '') . '/src/doctor/applications.php') ?>" class="btn btn-outline-secondary">Back to list</a>
           </div>

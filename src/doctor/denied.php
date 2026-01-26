@@ -43,8 +43,10 @@ $baseSql = "
     FROM application a
     JOIN applicant ap ON ap.applicant_id = a.applicant_id
     LEFT JOIN application_draft d ON d.application_id = a.application_id AND d.step = 1
-    WHERE (a.status = 'Denied' OR a.workflow_status = 'denied')
-";
+    WHERE (
+        a.workflow_status = 'cho_rejected'
+        OR a.status = 'Denied'
+    )";
 
 $params = [];
 $conds = [];
@@ -221,7 +223,10 @@ if ($barangayRes) {
                 </div>
 
                 <div class="d-flex align-items-center">
-                    <span class="badge text-white text-center" style="font-size: 1rem; width: 100px; padding: 0.5rem 0; background-color: #f87171;">FEEDBACK</span>
+                <span class="badge text-white text-center"
+                    style="font-size: 0.85rem; min-width: 140px; padding: 0.5rem 0.75rem; background-color: #dc2626;">
+                    REJECTED
+                </span>
                     <a href="<?= h($viewUrl) ?>" class="view-link text-primary text-decoration-none">
                         <i class="fas fa-eye me-1 ms-5"></i> View Applicant
                     </a>

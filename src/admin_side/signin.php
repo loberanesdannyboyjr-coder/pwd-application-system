@@ -55,7 +55,7 @@ require_once __DIR__ . '/../../config/paths.php'; // <-- add this line
 
           <div class="form-group">
             <!-- treat as username; change type to text to allow non-email usernames -->
-            <input type="text" name="email" class="form-control" placeholder="Username" required>
+            <input type="text" name="username" class="form-control" placeholder="Username" required>
             <span class="form-icon"><i class="fas fa-user"></i></span>
           </div>
           <div class="form-group">

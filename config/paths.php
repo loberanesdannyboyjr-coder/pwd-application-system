@@ -8,3 +8,5 @@ $basePath = '';
 
 define('APP_BASE_URL', $proto . '://' . rtrim($host, '/') . $basePath);
 define('ADMIN_BASE', rtrim(APP_BASE_URL, '/') . '/src/admin_side');
+
+

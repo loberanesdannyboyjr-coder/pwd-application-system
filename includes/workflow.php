@@ -1,46 +1,74 @@
 <?php
 // includes/workflow.php
-// Map action name => metadata
+// FINAL & LOCKED workflow transition map
+// Used by api/admin_action.php
+
 return [
-    // PDAO actions (performed by PDAO users)
+
+    /*
+    |--------------------------------------------------
+    | PDAO ACTIONS
+    |--------------------------------------------------
+    */
+
+    // PDAO forwards application to CHO for medical review
     'forward_to_cho' => [
-        'to_status' => 'For CHO Verification',
-        'allowed_roles' => ['PDAO','ADMIN'],
+        'to_status'       => 'cho_review',
+        'allowed_roles'   => ['ADMIN', 'PDAO'],
         'require_remarks' => false,
-        'redirect' => '/src/doctor/accepted.php'
+        'redirect'        => '/src/admin_side/application_review.php',
     ],
+
+    // PDAO requests additional information from applicant
     'request_more_info' => [
-        'to_status' => 'Pending - More Info Requested',
-        'allowed_roles' => ['PDAO','ADMIN'],
+        'to_status'       => 'pdao_rejected',
+        'allowed_roles'   => ['ADMIN', 'PDAO'],
         'require_remarks' => true,
-        'redirect' => null
+        // stay on page (reload)
     ],
+
+    // PDAO rejects application
     'reject' => [
-        'to_status' => 'CHO Rejected', // you could also use 'Denied' if you prefer
-        'allowed_roles' => ['PDAO','ADMIN'],
+        'to_status'       => 'rejected',
+        'allowed_roles'   => ['ADMIN', 'PDAO'],
         'require_remarks' => true,
-        'redirect' => null
+        'redirect'        => '/src/admin_side/application_review.php',
     ],
 
-    // CHO actions
+    /*
+    |--------------------------------------------------
+    | CHO ACTIONS
+    |--------------------------------------------------
+    */
+
+    // CHO verifies applicant as PWD
     'cho_verify' => [
-        'to_status' => 'Approved',
-        'allowed_roles' => ['CHO','DOCTOR','ADMIN'],
+        'to_status'       => 'cho_accepted',
+        'allowed_roles'   => ['CHO', 'ADMIN'],
         'require_remarks' => false,
-        'redirect' => '/src/doctor/accepted.php'
-    ],
-    'cho_reject' => [
-        'to_status' => 'CHO Rejected',
-        'allowed_roles' => ['CHO','DOCTOR'],
-        'require_remarks' => true,
-        'redirect' => null
+        'redirect'        => '/src/doctor/accepted.php',
     ],
 
-    // Finalize issuance (PDAO after CHO verified)
-    'finalize_issue_id' => [
-        'to_status' => 'Approved',
-        'allowed_roles' => ['PDAO','ADMIN'],
-        'require_remarks' => false,
-        'redirect' => '/src/admin_side/members.php'
+    // CHO rejects applicant as NOT PWD (medical rejection)
+    'cho_reject' => [
+        'to_status'       => 'cho_rejected',
+        'allowed_roles'   => ['CHO', 'ADMIN'],
+        'require_remarks' => true,
+        'redirect'        => '/src/doctor/denied.php',
     ],
+
+    /*
+    |--------------------------------------------------
+    | FINALIZATION
+    |--------------------------------------------------
+    */
+
+    // PDAO issues final PWD ID number
+    'finalize_issue_id' => [
+        'to_status'       => 'approved_final',
+        'allowed_roles'   => ['PDAO', 'ADMIN'],
+        'require_remarks' => false,
+        'redirect'        => '/src/admin_side/members.php',
+    ],
+
 ];

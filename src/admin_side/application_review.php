@@ -8,10 +8,14 @@ require_once __DIR__ . '/../../config/db.php';
 require_once __DIR__ . '/../../config/paths.php';
 
 // --- Admin auth: prefer boolean flag set during login ---
-if (empty($_SESSION['user_id']) || empty($_SESSION['is_admin'])) {
-    header('Location: ' . rtrim(APP_BASE_URL, '/') . '/src/admin_side/signin.php');
+$role = strtoupper($_SESSION['role'] ?? $_SESSION['user_role'] ?? '');
+
+if (!isset($_SESSION['username']) || !in_array($role, ['PDAO','ADMIN'], true)) {
+    header('Location: ' . APP_BASE_URL . '/backend/auth/login.php');
     exit;
 }
+
+
 
 /* ---------- Pagination & filter inputs ---------- */
 $limit = 20;

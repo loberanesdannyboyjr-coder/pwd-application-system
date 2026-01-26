@@ -42,7 +42,7 @@ $baseSql = "
     FROM application a
     JOIN applicant ap ON ap.applicant_id = a.applicant_id
     LEFT JOIN application_draft d ON d.application_id = a.application_id AND d.step = 1
-    WHERE a.workflow_status = 'cho_review'
+    WHERE a.workflow_status = 'returned_to_applicant'
 ";
 
 $params = [];
@@ -65,7 +65,7 @@ if (!empty($conds)) {
 }
 
 // Count total for pagination
-$countSql = "SELECT COUNT(*) as total FROM application a JOIN applicant ap ON ap.applicant_id = a.applicant_id LEFT JOIN application_draft d ON d.application_id = a.application_id AND d.step = 1 WHERE a.workflow_status = 'cho_review'";
+$countSql = "SELECT COUNT(*) as total FROM application a JOIN applicant ap ON ap.applicant_id = a.applicant_id LEFT JOIN application_draft d ON d.application_id = a.application_id AND d.step = 1 WHERE a.workflow_status = 'returned_to_applicant'";
 if (!empty($conds)) {
     $countSql .= ' AND ' . implode(' AND ', $conds);
 }
@@ -220,7 +220,10 @@ if ($barangayRes) {
                 </div>
 
                 <div class="d-flex align-items-center">
-                    <span class="badge text-white text-center" style="font-size: 1rem; width: 100px; padding: 0.5rem 0; background-color: #f0ad4e;">PENDING</span>
+                <span class="badge text-white text-center"
+                    style="font-size: 0.85rem; min-width: 140px; padding: 0.5rem 0.75rem; background-color: #f59e0b;">
+                    RETURNED TO APPLICANT
+                </span>
                     <a href="<?= h($viewUrl) ?>" class="view-link text-primary text-decoration-none">
                         <i class="fas fa-eye me-1 ms-5"></i> View Applicant
                     </a>

@@ -22,6 +22,14 @@ $_SESSION['application_type'] = $type;
 $step = 2;
 $draftData = loadDraftData($step, $application_id);
 
+// 🔒 LOCK FORM IF ALREADY SUBMITTED
+if (($draftData['workflow_status'] ?? 'draft') !== 'draft') {
+    http_response_code(403);
+    exit('Application already submitted. Editing is disabled.');
+}
+
+
+
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
     saveDraftData($step, $_POST, $application_id);
 
@@ -60,6 +68,15 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     header("Location: form3.php?type=" . urlencode($type));
     exit;
 }
+$currentStep = 2;
+
+// Initialize max_step if not set
+$_SESSION['max_step'] = $_SESSION['max_step'] ?? 1;
+
+// Never allow going backwards
+if ($_SESSION['max_step'] < $currentStep) {
+    $_SESSION['max_step'] = $currentStep;
+}
 ?>
 
 
@@ -81,164 +98,213 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
   <h1 class="form-title">PWD Application Form</h1>
 
-  <div class="step-indicator-wrapper">
-    <div class="step-indicator">
-      <div class="step">
-        <div class="circle">1</div>
-        <div class="label">Personal Information</div>
-      </div>
-      <div class="step active">
-        <div class="circle">2</div>
-        <div class="label">Affiliation Section</div>
-      </div>
-      <div class="step">
-        <div class="circle">3</div>
-        <div class="label">Approval Section</div>
-      </div>
-      <div class="step">
-        <div class="circle">4</div>
-        <div class="label">Upload Documents</div>
-      </div>
-      <div class="step">
-        <div class="circle">5</div>
-        <div class="label">Submission Complete</div>
-      </div>
-    </div>
-  </div>
+ <div class="step-indicator">
+
+  <a href="#" class="step <?= $currentStep === 1 ? 'active' : '' ?>" data-step="1">
+    <div class="circle">1</div>
+    <div class="label">Personal Information</div>
+  </a>
+
+  <a href="#" class="step <?= $currentStep === 2 ? 'active' : '' ?>" data-step="2">
+    <div class="circle">2</div>
+    <div class="label">Affiliation Section</div>
+  </a>
+
+  <a href="#" class="step <?= $currentStep === 3 ? 'active' : '' ?>" data-step="3">
+    <div class="circle">3</div>
+    <div class="label">Approval Section</div>
+  </a>
+
+  <a href="#" class="step <?= $currentStep === 4 ? 'active' : '' ?>" data-step="4">
+    <div class="circle">4</div>
+    <div class="label">Upload Documents</div>
+  </a>
+
+  <a href="#" class="step <?= $currentStep === 5 ? 'active' : '' ?>" data-step="5">
+    <div class="circle">5</div>
+    <div class="label">Submission Complete</div>
+  </a>
+</div>
+
 
 <main class="form-container">
-  <form method="POST" novalidate>
+  <form method="POST">
     <div class="row g-2 align-items-start">
       <div class="col-md-4 pe-md-2">
 
-        <!-- Educational Attainment -->
-        <div class="mb-2">
-          <label class="form-label fw-semibold">Educational Attainment</label>
-          <select name="educational_attainment" id="educational_attainment" class="form-select">
-            <option value="">Please Select</option>
-            <option value="None" <?= ($draftData['educational_attainment'] ?? '') === 'None' ? 'selected' : '' ?>>None</option>
-            <option value="Kindergarten" <?= ($draftData['educational_attainment'] ?? '') === 'Kindergarten' ? 'selected' : '' ?>>Kindergarten</option>
-            <option value="Elementary" <?= ($draftData['educational_attainment'] ?? '') === 'Elementary' ? 'selected' : '' ?>>Elementary</option>
-            <option value="Junior High School" <?= ($draftData['educational_attainment'] ?? '') === 'Junior High School' ? 'selected' : '' ?>>Junior High School</option>
-            <option value="Senior High School" <?= ($draftData['educational_attainment'] ?? '') === 'Senior High School' ? 'selected' : '' ?>>Senior High School</option>
-            <option value="College" <?= ($draftData['educational_attainment'] ?? '') === 'College' ? 'selected' : '' ?>>College</option>
-            <option value="Vocational" <?= ($draftData['educational_attainment'] ?? '') === 'Vocational' ? 'selected' : '' ?>>Vocational</option>
-            <option value="Post Graduate" <?= ($draftData['educational_attainment'] ?? '') === 'Post Graduate' ? 'selected' : '' ?>>Post Graduate</option>
-          </select>
-        </div>
+      <!-- Educational Attainment -->
+      <div class="mb-2">
+        <label class="form-label fw-semibold required">Educational Attainment</label>
+        <select name="educational_attainment" class="form-select" required>
+          <option value="">Please Select</option>
+          <option value="None" <?= ($draftData['educational_attainment'] ?? '') === 'None' ? 'selected' : '' ?>>None</option>
+          <option value="Kindergarten" <?= ($draftData['educational_attainment'] ?? '') === 'Kindergarten' ? 'selected' : '' ?>>Kindergarten</option>
+          <option value="Elementary" <?= ($draftData['educational_attainment'] ?? '') === 'Elementary' ? 'selected' : '' ?>>Elementary</option>
+          <option value="Junior High School" <?= ($draftData['educational_attainment'] ?? '') === 'Junior High School' ? 'selected' : '' ?>>Junior High School</option>
+          <option value="Senior High School" <?= ($draftData['educational_attainment'] ?? '') === 'Senior High School' ? 'selected' : '' ?>>Senior High School</option>
+          <option value="College" <?= ($draftData['educational_attainment'] ?? '') === 'College' ? 'selected' : '' ?>>College</option>
+          <option value="Vocational" <?= ($draftData['educational_attainment'] ?? '') === 'Vocational' ? 'selected' : '' ?>>Vocational</option>
+          <option value="Post Graduate" <?= ($draftData['educational_attainment'] ?? '') === 'Post Graduate' ? 'selected' : '' ?>>Post Graduate</option>
+        </select>
+      </div>
+
 
         <!-- Status of Employment -->
-        <div class="mb-2">
-          <label class="form-label fw-semibold">Status of Employment</label>
-          <select name="employment_status" class="form-select">
-            <option value="" <?= empty($draftData['employment_status']) ? 'selected' : '' ?>>Please Select</option>
-            <option value="Employed" <?= ($draftData['employment_status'] ?? '') === 'Employed' ? 'selected' : '' ?>>Employed</option>
-            <option value="Unemployed" <?= ($draftData['employment_status'] ?? '') === 'Unemployed' ? 'selected' : '' ?>>Unemployed</option>
-            <option value="Self-employed" <?= ($draftData['employment_status'] ?? '') === 'Self-employed' ? 'selected' : '' ?>>Self-employed</option>
-          </select>
-        </div>
+          <div class="mb-2">
+            <label class="form-label fw-semibold required">Status of Employment</label>
+            <select name="employment_status" class="form-select" required>
+              <option value="">Please Select</option>
+              <option value="Employed" <?= ($draftData['employment_status'] ?? '') === 'Employed' ? 'selected' : '' ?>>Employed</option>
+              <option value="Unemployed" <?= ($draftData['employment_status'] ?? '') === 'Unemployed' ? 'selected' : '' ?>>Unemployed</option>
+              <option value="Self-employed" <?= ($draftData['employment_status'] ?? '') === 'Self-employed' ? 'selected' : '' ?>>Self-employed</option>
+            </select>
+          </div>
+
 
         <!-- Category of Employment -->
         <div class="mb-2">
-          <label class="form-label fw-semibold">Category of Employment</label>
-          <select name="employment_category" class="form-select">
-            <option value="" <?= empty($draftData['employment_category']) ? 'selected' : '' ?>>Please Select</option>
+        <label id="employmentCategoryLabel"
+            class="form-label fw-semibold conditional-required">
+        Category of Employment
+      </label>
+        <select name="employment_category" id="employment_category" class="form-select">
+            <option value="">Please Select</option>
             <option value="Government" <?= ($draftData['employment_category'] ?? '') === 'Government' ? 'selected' : '' ?>>Government</option>
             <option value="Private" <?= ($draftData['employment_category'] ?? '') === 'Private' ? 'selected' : '' ?>>Private</option>
             <option value="Others" <?= ($draftData['employment_category'] ?? '') === 'Others' ? 'selected' : '' ?>>Others</option>
           </select>
         </div>
 
+
         <!-- Types of Employment -->
-        <div class="mb-0">
-          <label class="form-label fw-semibold">Types of Employment</label>
-          <select name="type_of_employment" class="form-select">
-            <option value="" <?= empty($draftData['type_of_employment']) ? 'selected' : '' ?>>Please Select</option>
-            <option value="Permanent/Regular" <?= ($draftData['type_of_employment'] ?? '') === 'Permanent/Regular' ? 'selected' : '' ?>>Permanent / Regular</option>
-            <option value="Seasonal" <?= ($draftData['type_of_employment'] ?? '') === 'Seasonal' ? 'selected' : '' ?>>Seasonal</option>
-            <option value="Casual" <?= ($draftData['type_of_employment'] ?? '') === 'Casual' ? 'selected' : '' ?>>Casual</option>
-            <option value="Emergency" <?= ($draftData['type_of_employment'] ?? '') === 'Emergency' ? 'selected' : '' ?>>Emergency</option>
-          </select>
-        </div>
-
-        </div>
-<!-- Right Column: Occupations -->
-<div class="col-md-8">
-  <label class="form-label fw-semibold mb-2" style="font-size: 1.25rem;">Occupation</label>
-  <div class="row g-0">
-    <div class="col-md-6">
-      <div class="form-check">
-        <input class="form-check-input" type="radio" name="occupation" value="Managers" id="managers"
-          <?= ($draftData['occupation'] ?? '') === 'Managers' ? 'checked' : '' ?>>
-        <label class="form-check-label ms-1 text-dark" for="managers">Managers</label>
-      </div>
-
-      <div class="form-check">
-        <input class="form-check-input" type="radio" name="occupation" value="Professionals" id="professionals"
-          <?= ($draftData['occupation'] ?? '') === 'Professionals' ? 'checked' : '' ?>>
-        <label class="form-check-label ms-1 text-dark" for="professionals">Professionals</label>
-      </div>
-
-      <div class="form-check">
-        <input class="form-check-input" type="radio" name="occupation" value="Technicians and Associate Professionals" id="tech"
-          <?= ($draftData['occupation'] ?? '') === 'Technicians and Associate Professionals' ? 'checked' : '' ?>>
-        <label class="form-check-label ms-1 text-dark" for="tech">Technicians and Associate Professionals</label>
-      </div>
-
-      <div class="form-check">
-        <input class="form-check-input" type="radio" name="occupation" value="Clerical Support Workers" id="clerical"
-          <?= ($draftData['occupation'] ?? '') === 'Clerical Support Workers' ? 'checked' : '' ?>>
-        <label class="form-check-label ms-1 text-dark" for="clerical">Clerical Support Workers</label>
-      </div>
-
-      <div class="form-check">
-        <input class="form-check-input" type="radio" name="occupation" value="Service and Sales Workers" id="service"
-          <?= ($draftData['occupation'] ?? '') === 'Service and Sales Workers' ? 'checked' : '' ?>>
-        <label class="form-check-label ms-1 text-dark" for="service">Service and Sales Workers</label>
-      </div>
-
-      <div class="form-check">
-        <input class="form-check-input" type="radio" name="occupation" value="Skilled Agricultural, Forestry and Fishery Workers" id="skilled"
-          <?= ($draftData['occupation'] ?? '') === 'Skilled Agricultural, Forestry and Fishery Workers' ? 'checked' : '' ?>>
-        <label class="form-check-label ms-1 text-dark" for="skilled">Skilled Agricultural, Forestry and Fishery Workers</label>
-      </div>
-    </div>
-
-            <div class="col-md-6">
-              <div class="form-check">
-                <input class="form-check-input" type="radio" name="occupation" value="Craft and Related Trade Workers" id="craft"
-                  <?= ($draftData['occupation'] ?? '') === 'Craft and Related Trade Workers' ? 'checked' : '' ?>>
-                <label class="form-check-label ms-1 text-dark" for="craft">Craft and Related Trade Workers</label>
-              </div>
-
-              <div class="form-check">
-                <input class="form-check-input" type="radio" name="occupation" value="Plant and Machinery Operators and Assemblers" id="plant"
-                  <?= ($draftData['occupation'] ?? '') === 'Plant and Machinery Operators and Assemblers' ? 'checked' : '' ?>>
-                <label class="form-check-label ms-1 text-dark" for="plant">Plant and Machinery Operators and Assemblers</label>
-              </div>
-
-              <div class="form-check">
-                <input class="form-check-input" type="radio" name="occupation" value="Elementary Occupations" id="elementary"
-                  <?= ($draftData['occupation'] ?? '') === 'Elementary Occupations' ? 'checked' : '' ?>>
-                <label class="form-check-label ms-1 text-dark" for="elementary">Elementary Occupations</label>
-              </div>
-
-              <div class="form-check">
-                <input class="form-check-input" type="radio" name="occupation" value="Armed Forces Occupations" id="armed"
-                  <?= ($draftData['occupation'] ?? '') === 'Armed Forces Occupations' ? 'checked' : '' ?>>
-                <label class="form-check-label ms-1 text-dark" for="armed">Armed Forces Occupations</label>
-              </div>
-
-              <div class="form-check d-flex align-items-center">
-                <input class="form-check-input me-2" type="radio" name="occupation" value="Others" id="others"
-                  <?= ($draftData['occupation'] ?? '') === 'Others' ? 'checked' : '' ?>>
-                <label class="form-check-label me-2 text-dark" for="others">Others, specify:</label>
-                <input type="text" class="form-control form-control-sm" style="width: 150px;" name="occupation_others"
-                  value="<?= htmlspecialchars($draftData['occupation_others'] ?? '') ?>">
-              </div>
-            </div>
+          <div class="mb-0">
+            <label id="employmentTypeLabel"
+              class="form-label fw-semibold conditional-required">
+          Types of Employment
+        </label>
+            <select name="type_of_employment" id="type_of_employment" class="form-select">
+              <option value="">Please Select</option>
+              <option value="Permanent/Regular" <?= ($draftData['type_of_employment'] ?? '') === 'Permanent/Regular' ? 'selected' : '' ?>>Permanent / Regular</option>
+              <option value="Seasonal" <?= ($draftData['type_of_employment'] ?? '') === 'Seasonal' ? 'selected' : '' ?>>Seasonal</option>
+              <option value="Casual" <?= ($draftData['type_of_employment'] ?? '') === 'Casual' ? 'selected' : '' ?>>Casual</option>
+              <option value="Emergency" <?= ($draftData['type_of_employment'] ?? '') === 'Emergency' ? 'selected' : '' ?>>Emergency</option>
+            </select>
           </div>
         </div>
+
+
+      <!-- Right Column: Occupations -->
+      <div class="col-md-8">
+        <label class="form-label fw-semibold conditional-required" id="occupationLabel"
+              style="font-size: 1.25rem;">
+          Occupation
+        </label>
+        <div class="row g-0">
+          <div class="col-md-6">
+
+            <div class="form-check">
+        <input class="form-check-input" type="radio" name="occupation" id="occ_managers"
+              value="Managers"
+              <?= ($draftData['occupation'] ?? '') === 'Managers' ? 'checked' : '' ?>>
+              <label class="form-check-label ms-1" for="occ_managers">Managers</label>
+            </div>
+
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="occupation" id="occ_professionals"
+                    value="Professionals"
+                    <?= ($draftData['occupation'] ?? '') === 'Professionals' ? 'checked' : '' ?>>
+              <label class="form-check-label ms-1" for="occ_professionals">Professionals</label>
+            </div>
+
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="occupation" id="occ_tech"
+                    value="Technicians and Associate Professionals"
+                    <?= ($draftData['occupation'] ?? '') === 'Technicians and Associate Professionals' ? 'checked' : '' ?>>
+              <label class="form-check-label ms-1" for="occ_tech">
+                Technicians and Associate Professionals
+              </label>
+            </div>
+
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="occupation" id="occ_clerical"
+                    value="Clerical Support Workers"
+                    <?= ($draftData['occupation'] ?? '') === 'Clerical Support Workers' ? 'checked' : '' ?>>
+              <label class="form-check-label ms-1" for="occ_clerical">Clerical Support Workers</label>
+            </div>
+
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="occupation" id="occ_service"
+                    value="Service and Sales Workers"
+                    <?= ($draftData['occupation'] ?? '') === 'Service and Sales Workers' ? 'checked' : '' ?>>
+              <label class="form-check-label ms-1" for="occ_service">Service and Sales Workers</label>
+            </div>
+
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="occupation" id="occ_skilled"
+                    value="Skilled Agricultural, Forestry and Fishery Workers"
+                    <?= ($draftData['occupation'] ?? '') === 'Skilled Agricultural, Forestry and Fishery Workers' ? 'checked' : '' ?>>
+              <label class="form-check-label ms-1" for="occ_skilled">
+                Skilled Agricultural, Forestry and Fishery Workers
+              </label>
+            </div>
+
+          </div>
+
+          <div class="col-md-6">
+
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="occupation" id="occ_craft"
+                    value="Craft and Related Trade Workers"
+                    <?= ($draftData['occupation'] ?? '') === 'Craft and Related Trade Workers' ? 'checked' : '' ?>>
+              <label class="form-check-label ms-1" for="occ_craft">
+                Craft and Related Trade Workers
+              </label>
+            </div>
+
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="occupation" id="occ_plant"
+                    value="Plant and Machinery Operators and Assemblers"
+                    <?= ($draftData['occupation'] ?? '') === 'Plant and Machinery Operators and Assemblers' ? 'checked' : '' ?>>
+              <label class="form-check-label ms-1" for="occ_plant">
+                Plant and Machinery Operators and Assemblers
+              </label>
+            </div>
+
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="occupation" id="occ_elementary"
+                    value="Elementary Occupations"
+                    <?= ($draftData['occupation'] ?? '') === 'Elementary Occupations' ? 'checked' : '' ?>>
+              <label class="form-check-label ms-1" for="occ_elementary">
+                Elementary Occupations
+              </label>
+            </div>
+
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="occupation" id="occ_armed"
+                    value="Armed Forces Occupations"
+                    <?= ($draftData['occupation'] ?? '') === 'Armed Forces Occupations' ? 'checked' : '' ?>>
+              <label class="form-check-label ms-1" for="occ_armed">
+                Armed Forces Occupations
+              </label>
+            </div>
+
+            <!-- Others -->
+            <div class="form-check d-flex align-items-center mt-1">
+              <input class="form-check-input me-2" type="radio" name="occupation" id="occ_others"
+                    value="Others"
+                    <?= ($draftData['occupation'] ?? '') === 'Others' ? 'checked' : '' ?>>
+              <label class="form-check-label me-2" for="occ_others">Others, specify:</label>
+              <input type="text"
+                    name="occupation_others"
+                    class="form-control form-control-sm"
+                    style="width: 160px;"
+                    value="<?= htmlspecialchars($draftData['occupation_others'] ?? '') ?>">
+            </div>
+
+          </div>
+        </div>
+      </div>
+
 
           <!-- Organization Info -->
       <div class="row g-2 mt-3">
@@ -449,7 +515,14 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
       </div>
     </form>
 
+    
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+
+    <script>
+  window.currentStep = <?= (int)$currentStep ?>;
+  window.maxAllowedStep = <?= (int)($_SESSION['max_step'] ?? 1) ?>;
+</script>
+
 
  <script>
   document.addEventListener('DOMContentLoaded', () => {
@@ -473,6 +546,25 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     updateRows(); // Initialize on page load
   });
 </script>
+
+<script>
+document.querySelectorAll('.step').forEach(step => {
+  step.addEventListener('click', function (e) {
+    e.preventDefault();
+
+    const targetStep = parseInt(this.dataset.step, 10);
+
+    // Prevent skipping ahead
+    if (targetStep > window.maxAllowedStep) {
+      alert('Please complete the previous step first.');
+      return;
+    }
+
+    window.location.href = `form${targetStep}.php`;
+  });
+});
+</script>
+
   </body>
   <script>
     const form = document.querySelector('form');
@@ -486,4 +578,93 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     });
   </script>
 
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const status = document.querySelector('[name="employment_status"]');
+
+  const category = document.getElementById('employment_category');
+  const type = document.getElementById('type_of_employment');
+
+  const categoryLabel = document.getElementById('employmentCategoryLabel');
+  const typeLabel = document.getElementById('employmentTypeLabel');
+
+  const occupationRadios = document.querySelectorAll('input[name="occupation"]');
+  const occupationOther = document.querySelector('[name="occupation_others"]');
+  const occupationLabel = document.getElementById('occupationLabel');
+
+  function toggleEmploymentFields() {
+    const employed = status.value !== 'Unemployed' && status.value !== '';
+
+    /* CATEGORY & TYPE */
+    category.required = employed;
+    type.required = employed;
+
+    category.disabled = !employed;
+    type.disabled = !employed;
+
+    categoryLabel.classList.toggle('required', employed);
+    typeLabel.classList.toggle('required', employed);
+
+    if (!employed) {
+      category.value = '';
+      type.value = '';
+    }
+
+    /* OCCUPATION */
+    occupationRadios.forEach(radio => {
+      radio.required = employed;
+      radio.disabled = !employed;
+      if (!employed) radio.checked = false;
+    });
+
+    occupationLabel.classList.toggle('required', employed);
+
+    /* OTHERS */
+    if (!employed) {
+      occupationOther.value = '';
+      occupationOther.disabled = true;
+      occupationOther.required = false;
+    }
+  }
+
+  status.addEventListener('change', toggleEmploymentFields);
+  toggleEmploymentFields();
+
+  /* OTHERS TOGGLE */
+  occupationRadios.forEach(radio => {
+    radio.addEventListener('change', () => {
+      const isOthers = radio.value === 'Others' && radio.checked;
+      occupationOther.disabled = !isOthers;
+      occupationOther.required = isOthers;
+      if (!isOthers) occupationOther.value = '';
+    });
+  });
+});
+</script>
+
+
+<style>
+  label.required::after {
+    content: " *";
+    color: #dc3545; /* Bootstrap danger red */
+    font-weight: bold;
+  }
+</style>
+
+
+
+<style>
+  .step {
+  text-decoration: none;
+  color: inherit;
+}
+
+.step:hover,
+.step:visited,
+.step:active {
+  text-decoration: none;
+  color: inherit;
+}
+
+</style>
   </html>

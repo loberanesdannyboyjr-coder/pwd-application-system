@@ -40,7 +40,9 @@ $baseSql = "
     FROM applicant ap
     JOIN application a ON a.applicant_id = ap.applicant_id
     LEFT JOIN application_draft d ON d.application_id = a.application_id AND d.step = 1
-    WHERE a.status = 'Approved'
+    WHERE a.workflow_status = 'approved_final'
+    AND ap.pwd_number IS NOT NULL
+
 ";
 
 $params = [];
@@ -57,7 +59,8 @@ if (!empty($conds)) {
 }
 
 // Count total for pagination
-$countSql = "SELECT COUNT(*) as total FROM applicant ap JOIN application a ON a.applicant_id = ap.applicant_id LEFT JOIN application_draft d ON d.application_id = a.application_id AND d.step = 1 WHERE a.status = 'Approved'";
+$countSql = "SELECT COUNT(*) as total FROM applicant ap JOIN application a ON a.applicant_id = ap.applicant_id LEFT JOIN application_draft d ON d.application_id = a.application_id AND d.step = 1 WHERE a.workflow_status = 'approved_final'
+  AND ap.pwd_number IS NOT NULL";
 if (!empty($conds)) {
     $countSql .= ' AND ' . implode(' AND ', $conds);
 }

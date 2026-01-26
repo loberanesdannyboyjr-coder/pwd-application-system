@@ -39,7 +39,7 @@ services:
         apt-get update && apt-get install -y libpq-dev &&
         docker-php-ext-install pgsql pdo_pgsql &&
         a2enmod rewrite &&
-        sed -i 's|/var/www/html|/var/www/html/PWD-Application-System|g' /etc/apache2/sites-available/000-default.conf &&
+        sed -i 's|DocumentRoot .*|DocumentRoot /var/www/html/PWD-Application-System|' /etc/apache2/sites-available/000-default.conf &&
         echo '<Directory /var/www/html/PWD-Application-System>' >> /etc/apache2/apache2.conf &&
         echo '  AllowOverride All' >> /etc/apache2/apache2.conf &&
         echo '</Directory>' >> /etc/apache2/apache2.conf &&

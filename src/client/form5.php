@@ -1,23 +1,50 @@
- <?php
-session_start();
+<?php
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
 require_once '../../config/db.php';
 require_once '../../includes/DraftHelper.php';
 
-if (!isset($_SESSION['application_id'])) {
-  header("Location: form1.php");
-  exit;
-}
+
 
 $application_id = (int) $_SESSION['application_id'];
 $form1 = loadDraftData(1, $application_id);
 $form2 = loadDraftData(2, $application_id);
 $form3 = loadDraftData(3, $application_id);
 $form4 = loadDraftData(4, $application_id);
+
 $draftData = array_merge($form1, $form2, $form3, $form4);
-?>
+
+/* ===============================
+   LOAD documentrequirements
+================================ */
+$docRow = [];
+
+$res = pg_query_params(
+    $conn,
+    "SELECT *
+     FROM public.documentrequirements
+     WHERE application_id = $1
+     LIMIT 1",
+    [$application_id]
+);
+
+if ($res && pg_num_rows($res) > 0) {
+    $docRow = pg_fetch_assoc($res);
+}
+
+/* ✅ merge ONCE */
+$draftData = array_merge($draftData, $docRow);
+
+/* ✅ explicit mapping (optional but safe) */
+$draftData['pic_1x1_path'] = $docRow['pic_1x1_path'] ?? null;
+
+
+$currentStep = 5;
+$maxStep = $_SESSION['max_step'] ?? 5;
  
-
-
+?>
  
  <!DOCTYPE html>
   <html lang="en">
@@ -43,83 +70,105 @@ $draftData = array_merge($form1, $form2, $form3, $form4);
     <?php include __DIR__ . '/../../hero/navbar.php'; ?>
 
   <h1 class="form-title">Application Summary</h1>
+<div class="step-indicator-wrapper mb-4">
+  <div class="step-indicator">
 
-    <div class="step-indicator-wrapper">
-      <div class="step-indicator">
-        <div class="step">
-          <div class="circle">1</div>
-          <div class="label">Personal Information</div>
-        </div>
-        <div class="step">
-          <div class="circle">2</div>
-          <div class="label">Affiliation Section</div>
-        </div>
-        <div class="step">
-          <div class="circle">3</div>
-          <div class="label">Approval Section</div>
-        </div>
-        <div class="step">
-          <div class="circle">4</div>
-          <div class="label">Upload Documents</div>
-        </div>
-        <div class="step active">
-          <div class="circle">5</div>
-          <div class="label">Application Summary</div>
-        </div>
-      </div>
-    </div>
+    <?php
+    $steps = [
+      1 => 'Personal Information',
+      2 => 'Affiliation Section',
+      3 => 'Approval Section',
+      4 => 'Upload Documents',
+      5 => 'Application Summary'
+    ];
+
+    foreach ($steps as $num => $label):
+      $state =
+        $num < $currentStep ? 'completed' :
+        ($num === $currentStep ? 'active' : '');
+    ?>
+      <a href="#"
+         class="step <?= $state ?>"
+         data-step="<?= $num ?>">
+        <div class="circle"><?= $num ?></div>
+        <div class="label"><?= $label ?></div>
+      </a>
+    <?php endforeach; ?>
+
+  </div>
+</div>
 
   <main class="form-container">
     <form novalidate>
  <!-- Row 1 -->
-    <div class="row g-3 mb-3">
-      <div class="col-md-3">
-        <label class="form-label fw-semibold">Applicant Type</label>
-        <div class="form-control bg-light">
-          <?= htmlspecialchars($draftData['application_type'] ?? 'N/A') ?>
-        </div>
-      </div>
-      <div class="col-md-4">
-        <label class="form-label fw-semibold">PWD Number</label>
-        <div class="form-control bg-light">
-          <?= htmlspecialchars($draftData['pwd_number'] ?? 'To be filled by PDAO') ?>
-        </div>
-      </div>
-      <div class="col-md-3">
-        <label class="form-label fw-semibold">Date Applied</label>
-        <div class="form-control bg-light">
-          <?= htmlspecialchars($draftData['application_date'] ?? '') ?>
-        </div>
-      </div>
-      <div class="col-md-2 text-center">
-        <label class="form-label fw-semibold">Photo</label><br>
-        <?php if (!empty($draftData['pic_1x1_path'])): ?>
-          <img src="<?= htmlspecialchars($draftData['pic_1x1_path']) ?>" class="img-thumbnail" width="120">
-        <?php else: ?>
-          <span class="text-muted">Not uploaded</span>
-        <?php endif; ?>
-      </div>
+ <div class="row g-3 mb-4 align-items-start">
+
+  <div class="col-md-3">
+    <label class="form-label fw-semibold">Applicant Type</label>
+    <div class="readonly-field">
+      <?= htmlspecialchars($draftData['application_type'] ?? 'N/A') ?>
+    </div>
+  </div>
+
+  <div class="col-md-4">
+    <label class="form-label fw-semibold">PWD Number</label>
+    <div class="readonly-field">
+      <?= htmlspecialchars($draftData['pwd_number'] ?? 'To be filled by PDAO') ?>
+    </div>
+  </div>
+
+<div class="col-md-3">
+  <label class="form-label fw-semibold">Date Applied</label>
+  <div class="readonly-field">
+    <?php
+      if (!empty($draftData['application_date'])) {
+        echo date('F j, Y', strtotime($draftData['application_date']));
+      } else {
+        echo date('F j, Y'); // preview only
+      }
+    ?>
+  </div>
+</div>
+
+
+    <!-- PHOTO -->
+    <div class="col-md-2 text-center">
+      <label class="form-label fw-semibold d-block">Photo</label>
+
+      <?php
+        $photo = $draftData['pic_1x1_path'] ?? '';
+      ?>
+
+      <?php if (!empty($photo)): ?>
+        <img src="<?= htmlspecialchars($photo) ?>"
+            class="img-thumbnail"
+            style="width:120px;height:120px;object-fit:cover;">
+      <?php else: ?>
+        <div class="text-muted small">Not uploaded</div>
+      <?php endif; ?>
     </div>
 
-      <!-- Row 2 -->
-      <div class="row g-3 mb-3" style="margin-top: -55px;">
-        <div class="col-md-3">
-          <label class="form-label fw-semibold">Last Name</label>
-          <div class="form-control bg-light"><?= htmlspecialchars($draftData['last_name'] ?? 'N/A') ?></div>
-        </div>
-        <div class="col-md-3">
-          <label class="form-label fw-semibold">First Name</label>
-          <div class="form-control bg-light"><?= htmlspecialchars($draftData['first_name'] ?? 'N/A') ?></div>
-        </div>
-        <div class="col-md-3">
-          <label class="form-label fw-semibold">Middle Name</label>
-          <div class="form-control bg-light"><?= htmlspecialchars($draftData['middle_name'] ?? 'N/A') ?></div>
-        </div>
-        <div class="col-md-3">
-          <label class="form-label fw-semibold">Suffix</label>
-          <div class="form-control bg-light"><?= htmlspecialchars($draftData['suffix'] ?? 'N/A') ?></div>
-        </div>
-      </div>
+    </div>
+
+<!-- ROW 2 -->
+<div class="row g-3 mb-3">
+  <div class="col-md-3">
+    <label class="form-label fw-semibold">Last Name</label>
+    <div class="readonly-field"><?= htmlspecialchars($draftData['last_name'] ?? 'N/A') ?></div>
+  </div>
+  <div class="col-md-3">
+    <label class="form-label fw-semibold">First Name</label>
+    <div class="readonly-field"><?= htmlspecialchars($draftData['first_name'] ?? 'N/A') ?></div>
+  </div>
+  <div class="col-md-3">
+    <label class="form-label fw-semibold">Middle Name</label>
+    <div class="readonly-field"><?= htmlspecialchars($draftData['middle_name'] ?? 'N/A') ?></div>
+  </div>
+  <div class="col-md-3">
+    <label class="form-label fw-semibold">Suffix</label>
+    <div class="readonly-field"><?= htmlspecialchars($draftData['suffix'] ?? 'N/A') ?></div>
+  </div>
+</div>
 
       <!-- Row 3 -->
       <div class="row g-3 mb-3">
@@ -274,7 +323,7 @@ $draftData = array_merge($form1, $form2, $form3, $form4);
         'Others'
       ];
       $selectedOcc = $draftData['occupation'] ?? '';
-      $otherOcc = $draftData['occupation_other'] ?? '';
+      $otherOcc = $draftData['occupation_others'] ?? '';
     ?>
 
     <div class="col-md-6">
@@ -611,6 +660,14 @@ if (!empty($draftData['medicalcert_path'])) {
   $files[] = ['label' => 'Medical Certificate', 'path' => $draftData['medicalcert_path']];
 }
 
+if (!empty($draftData['proof_disability_path'])) {
+  $files[] = [
+    'label' => 'Proof of Disability',
+    'path'  => $draftData['proof_disability_path']
+  ];
+}
+
+
 // Renewal only
 if ($type === 'renew' && !empty($draftData['old_pwd_id_path'])) {
   $files[] = ['label' => 'Old PWD ID', 'path' => $draftData['old_pwd_id_path']];
@@ -625,6 +682,8 @@ if ($type === 'lost' && !empty($draftData['affidavit_loss_path'])) {
 if (!empty($draftData['cho_cert_path'])) {
   $files[] = ['label' => 'CHO Certificate', 'path' => $draftData['cho_cert_path']];
 }
+
+
 
 // Helpers
 $prettyName = function(string $p) {
@@ -664,17 +723,84 @@ $viewTarget = function(string $p) {
   <div class="text-muted mb-4">No files uploaded.</div>
 <?php endif; ?>
 
-        <!-- Buttons -->
-        <div class="d-flex justify-content-between mt-4">
-          <a href="form4.php" class="btn btn-outline-primary">Back</a>
-          <button type="submit" class="btn btn-success">Confirm & Submit</button>
-        </div>
+      <!-- Buttons -->
+      <div class="d-flex justify-content-between mt-4">
+        <a href="form4.php" class="btn btn-outline-primary">Back</a>
+
+        <?php if (($draftData['workflow_status'] ?? '') === 'submitted'): ?>
+          <button class="btn btn-success" disabled>
+            ✔ Already Submitted
+          </button>
+        <?php else: ?>
+          <button id="submitBtn" type="button" class="btn btn-success">
+            Confirm & Submit
+          </button>
+        <?php endif; ?>
+      </div>
+
+          <script>
+    document.querySelectorAll('.step').forEach(step => {
+      step.addEventListener('click', function (e) {
+        e.preventDefault();
+
+        const targetStep = parseInt(this.dataset.step, 10);
+        const maxAllowed = <?= (int)($_SESSION['max_step'] ?? 5) ?>;
+
+        if (targetStep > maxAllowed) {
+          alert('Please complete the previous step first.');
+          return;
+        }
+
+        window.location.href = `form${targetStep}.php?type=<?= urlencode($type) ?>`;
+      });
+    });
+    </script>
+
+
+      <script>
+document.getElementById('submitBtn').addEventListener('click', async function () {
+
+  const btn = this;
+  btn.disabled = true;
+  btn.innerText = 'Submitting...';
+
+  try {
+   const response = await fetch('/api/submit_application.php', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    application_id: <?= (int) $application_id ?>
+  })
+});
+
+    const data = await response.json();
+
+    if (!response.ok || !data.success) {
+      throw new Error(data.error || 'Submission failed');
+    }
+    alert('✅ Your application has been submitted successfully.');
+
+    // ✅ redirect to client home
+    window.location.href = 'http://localhost:8080/public/index.php';
+
+  } catch (err) {
+    console.error(err); // ✅ debugging
+    alert('❌ ' + err.message);
+
+    btn.disabled = false;
+    btn.innerText = 'Confirm & Submit';
+  }
+});
+</script>
+
 
 
         </form>
       </main>
 
-        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+        
+
 
         <style>
       /* Uniform read-only box that matches Bootstrap form-control look */
@@ -691,10 +817,18 @@ $viewTarget = function(string $p) {
       }
 
       /* keep radios non-interactive and blue */
-      .readonly-radio{
-        pointer-events:none;
-        opacity:1;
-        accent-color:#0d6efd;
+
+      .step {
+        text-decoration: none;
+        color: inherit;
+        cursor: pointer;
+      }
+
+      .step:hover,
+      .step:visited,
+      .step:active {
+        text-decoration: none;
+        color: inherit;
       }
     </style>
 
