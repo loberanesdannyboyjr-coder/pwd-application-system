@@ -7,15 +7,38 @@ if (session_status() === PHP_SESSION_NONE) session_start();
 require_once __DIR__ . '/../../config/db.php';
 require_once __DIR__ . '/../../config/paths.php';
 
-// --- Admin auth: prefer boolean flag set during login ---
-$role = strtoupper($_SESSION['role'] ?? $_SESSION['user_role'] ?? '');
 
-if (!isset($_SESSION['username']) || !in_array($role, ['PDAO','ADMIN'], true)) {
-    header('Location: ' . APP_BASE_URL . '/backend/auth/login.php');
+/* ------------------ AUTH ------------------ */
+if (!isset($_SESSION['username']) || !in_array($_SESSION['role'] ?? '', ['admin', 'super_admin'])) {
+      header('Location: ' . ADMIN_BASE . '/signin.php');
     exit;
 }
 
+/* ------------------ DELETE APPLICATION ------------------ */
+if (isset($_GET['delete_app'])) {
 
+    if (($_SESSION['role'] ?? '') !== 'super_admin') {
+        die("Unauthorized access.");
+    }
+
+    $app_id = (int) $_GET['delete_app'];
+
+    pg_query_params($conn,
+        "DELETE FROM documentrequirements WHERE application_id = $1",
+        [$app_id]
+    );
+
+    pg_query_params($conn,
+        "DELETE FROM application WHERE application_id = $1",
+        [$app_id]
+    );
+
+    header("Location: application_review.php");
+    exit;
+}
+
+// --- Admin auth: prefer boolean flag set during login ---
+$role = $_SESSION['role'] ?? '';
 
 /* ---------- Pagination & filter inputs ---------- */
 $limit = 20;
@@ -31,27 +54,44 @@ $where = [];
 $params = [];
 $paramIndex = 1;
 
-if ($status !== '' && strtolower($status) !== 'all') {
-    $where[] = "a.status = $" . $paramIndex++;
-    $params[] = $status;
+if ($status !== '' && $status !== 'All') {
+
+    $workflowMap = [
+        'FOR PDAO REVIEW' => 'pdao_review',
+        'FOR CHO REVIEW'  => 'cho_review',
+        'CHO APPROVED'    => 'cho_approved',
+        'PDAO APPROVED'   => 'pdao_approved',
+        'DISAPPROVED'     => 'rejected',
+    ];
+
+    if (isset($workflowMap[$status])) {
+        $where[] = "a.workflow_status = $" . $paramIndex++;
+        $params[] = $workflowMap[$status];
+    }
 }
 
+
 if ($search !== '') {
+
     $where[] = "(
-        ap.first_name ILIKE $" . $paramIndex++ . " OR
-        ap.last_name ILIKE $" . $paramIndex++ . " OR
-        (ap.first_name || ' ' || ap.last_name) ILIKE $" . $paramIndex++ . "
+        COALESCE(d.data->>'first_name', ap.first_name) ILIKE $" . $paramIndex . " OR
+        COALESCE(d.data->>'last_name', ap.last_name) ILIKE $" . $paramIndex . " OR
+        (
+          COALESCE(d.data->>'first_name', ap.first_name) || ' ' ||
+          COALESCE(d.data->>'last_name', ap.last_name)
+        ) ILIKE $" . $paramIndex . "
     )";
-    $wild = '%' . $search . '%';
-    $params[] = $wild;
-    $params[] = $wild;
-    $params[] = $wild;
+
+    $params[] = '%' . $search . '%';
+    $paramIndex++;
 }
 
 if ($barangay !== '') {
     $where[] = "ap.barangay ILIKE $" . $paramIndex++;
     $params[] = '%' . $barangay . '%';
 }
+
+$where[] = "(a.workflow_status = 'pdao_review' OR a.workflow_status = 'cho_review')";
 
 $whereSql = '';
 if (!empty($where)) {
@@ -74,16 +114,21 @@ if ($countRes !== false) {
 
 /* ---------- Fetch rows (add limit/offset params) ---------- */
 $fetchSql = "
-  SELECT
-    a.application_id,
-    a.application_type,
-    a.application_date,
-    a.status,
-    ap.first_name,
-    ap.last_name,
-    ap.middle_name
-  FROM application a
-  JOIN applicant ap ON a.applicant_id = ap.applicant_id
+SELECT
+  a.application_id,
+  a.application_type,
+  a.application_date,
+  a.workflow_status,
+
+  COALESCE(d.data->>'first_name', ap.first_name)   AS first_name,
+  COALESCE(d.data->>'middle_name', ap.middle_name) AS middle_name,
+  COALESCE(d.data->>'last_name', ap.last_name)     AS last_name
+
+FROM application a
+JOIN applicant ap ON a.applicant_id = ap.applicant_id
+LEFT JOIN application_draft d
+  ON d.application_id = a.application_id
+ AND d.step = 1
   $whereSql
   ORDER BY a.application_date DESC NULLS LAST
   LIMIT $" . $paramIndex++ . " OFFSET $" . $paramIndex++ . "
@@ -127,111 +172,160 @@ $curPage = basename($_SERVER['SCRIPT_NAME']);
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
 
-  <style>
-    body { background:#f6f7f9; font-family: system-ui, -apple-system, "Segoe UI", Roboto; }
-    .app-wrapper { display:flex; min-height:100vh; }
-    .sidebar { width:250px; background: linear-gradient(180deg,#1f2b6f,#2c54a6); color:#fff; padding:20px 16px; }
-    .sidebar .logo { display:flex; align-items:center; gap:10px; }
-    .sidebar .logo h4 { margin:0; }
-    .sidebar .nav-link, .submenu-link { color:#eef3ff; text-decoration:none; padding:10px; display:block; border-radius:6px; }
-    .sidebar .nav-link:hover, .submenu-link:hover, .sidebar .nav-link.active, .submenu-link.active { background: rgba(255,255,255,0.10); color:#fff; }
-    .submenu { max-height:0; overflow:hidden; transition:max-height 260ms cubic-bezier(.2,.8,.2,1); }
-    .sidebar-item.open .submenu { padding-top:6px; padding-bottom:6px; }
-    .chevron-icon { transition:transform .24s ease; }
-    .chevron-icon.rotate { transform:rotate(180deg); }
-    .main { flex:1; padding:28px; }
-    .card.table-card { border-radius:8px; box-shadow:0 8px 18px rgba(0,0,0,0.06); }
-    .table thead th { background:#2d6be6; color:#fff; border:0; }
-    .view-link { color:#2f5ec8; text-decoration:none; white-space:nowrap; display:inline-flex; align-items:center; gap:6px; font-weight:500; }
-    .view-link:hover { color:#1e47a0; text-decoration:none; }
-  </style>
+      <style>
+      body {
+    background:#f6f7f9;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto;
+}
+
+/* MAIN CONTENT SHIFT */
+#mainContent {
+    margin-left: 64px;
+    transition: 0.3s;
+}
+
+body.sidebar-expanded #mainContent {
+    margin-left: 256px;
+}
+
+/* CARD */
+.card.table-card { 
+    border-radius:12px; 
+    box-shadow:0 10px 25px rgba(0,0,0,0.06); 
+    border: none;
+}
+
+/* TABLE */
+.table {
+    border-collapse: separate;
+    border-spacing: 0;
+    
+}
+
+/* HEADER */
+.table thead th {  
+    background: #4b5563; 
+    color: #fff; 
+    border: 0; 
+    padding: 14px; 
+    font-weight: 600;
+}
+
+
+
+/* Rounded header */
+.table thead th:first-child {
+    border-top-left-radius: 12px;
+}
+
+.table thead th:last-child {
+    border-top-right-radius: 12px;
+}
+
+/* ROWS */
+.table tbody td {
+    padding: 12px;
+    border-top: 1px solid #e5e7eb;
+    vertical-align: middle; /* 🔥 important fix */
+}
+
+/* ACTION BUTTON WRAPPER */
+.action-buttons{
+    display:flex;
+    align-items:center;
+    justify-content:center; /* 🔥 CENTER FIX */
+    gap:8px;
+}
+
+/* BASE SOFT BUTTON */
+.btn-soft{
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
+
+    padding:6px 12px;
+    font-size:12.5px;
+    font-weight:500;
+
+    border-radius:10px;
+    text-decoration:none;
+
+    border:1px solid transparent;
+    transition: all 0.2s ease;
+}
+
+/* VIEW (SOFT BLUE) */
+.btn-view{
+    background:#e7f0ff;
+    color:#3b82f6;
+}
+
+.btn-view:hover{
+    background:#dbeafe;
+    color:#2563eb;
+    box-shadow:0 2px 6px rgba(59,130,246,0.2);
+}
+
+/* DELETE (SOFT RED) */
+.btn-delete{
+    background:#fde8e8;
+    color:#ef4444;
+}
+
+.btn-delete:hover{
+    background:#fbd5d5;
+    color:#dc2626;
+    box-shadow:0 2px 6px rgba(239,68,68,0.2);
+}
+            </style>
+
 </head>
 <body>
-  <div class="app-wrapper">
 
-  <!-- SIDEBAR -->
-  <div class="sidebar">
-    <div class="logo">
-      <img src="<?= rtrim(APP_BASE_URL, '/') ?>/assets/pictures/white.png" width="40" alt="logo">
-      <h4>PDAO</h4>
-    </div>
-    <hr>
-
-    <a href="<?= rtrim(APP_BASE_URL, '/') . '/src/admin_side/dashboard.php' ?>"
-      class="nav-link <?= $curPage==='dashboard.php'?'active':'' ?>">
-      <i class="fas fa-chart-line me-2"></i> Dashboard
-    </a>
-
-    <a href="<?= rtrim(APP_BASE_URL, '/') . '/src/admin_side/members.php' ?>"
-      class="nav-link <?= $curPage==='members.php'?'active':'' ?>">
-      <i class="fas fa-users me-2"></i> Members
-    </a>
-
-    <div class="sidebar-item">
-      <div class="submenu-toggle d-flex justify-content-between align-items-center" tabindex="0">
-        <span class="d-flex align-items-center">
-          <i class="fas fa-folder me-2"></i> Manage Applications
-        </span>
-        <i class="fas fa-chevron-down chevron-icon"></i>
-      </div>
-
-      <div class="submenu">
-        <a href="<?= rtrim(APP_BASE_URL, '/') . '/src/admin_side/application_review.php' ?>"
-          class="submenu-link ps-4 <?= $curPage==='application_review.php'?'active':'' ?>">
-          <i class="fas fa-file-alt me-1"></i> Application Review
-        </a>
-
-        <a href="<?= rtrim(APP_BASE_URL, '/') . '/src/admin_side/accepted.php' ?>"
-          class="submenu-link ps-4 <?= $curPage==='accepted.php'?'active':'' ?>">
-          <i class="fas fa-user-check me-1"></i> Accepted
-        </a>
-
-        <a href="<?= rtrim(APP_BASE_URL, '/') . '/src/admin_side/pending.php' ?>"
-          class="submenu-link ps-4 <?= $curPage==='pending.php'?'active':'' ?>">
-          <i class="fas fa-hourglass-half me-1"></i> Pending
-        </a>
-
-        <a href="<?= rtrim(APP_BASE_URL, '/') . '/src/admin_side/denied.php' ?>"
-          class="submenu-link ps-4 <?= $curPage==='denied.php'?'active':'' ?>">
-          <i class="fas fa-user-times me-1"></i> Denied
-        </a>
-      </div>
-    </div>
-
-    <a href="<?= rtrim(APP_BASE_URL, '/') . '/src/admin_side/logout.php' ?>" class="nav-link">
-      <i class="fas fa-sign-out-alt me-2"></i> Logout
-    </a>
-  </div>
+<?php include __DIR__ . '/../../includes/pdao_sidebar.php'; ?>  
 
   <!-- MAIN AREA -->
-  <main class="main">
+  <div id="mainContent" class="ml-16 p-6 transition-all duration-300">
+
     <div class="d-flex justify-content-between align-items-center mb-3">
-      <h2><i class="fas fa-file-alt me-2"></i>Application Review</h2>
-      <div class="text-muted">
-        Hello, <?= e($_SESSION['display_name'] ?? $_SESSION['username'] ?? 'Admin') ?>
-      </div>
+      <h2>Application Review</h2>
+      <div>Hello, <?= e($_SESSION['username'] ?? 'Admin') ?></div>
     </div>
 
     <div class="card table-card">
       <div class="card-body">
+
+              <?php if (isset($_GET['deleted'])): ?>
+            <div class="alert alert-success mb-3">
+                Application deleted successfully.
+            </div>
+        <?php endif; ?>
         <div class="d-flex justify-content-between align-items-center mb-3">
           <form method="get" class="d-flex gap-2 align-items-center search-row" style="margin:0;">
             <input type="text" name="q" value="<?= e($_GET['q'] ?? '') ?>"
                   class="form-control" placeholder="Search applicant name..." style="width:320px;">
 
-            <select name="status" class="form-select" style="width:160px;">
-              <?php foreach (['All','Pending','Accepted','Rejected','Denied'] as $s): ?>
-                <option value="<?= e($s) ?>" <?= ($s===$status)?'selected':'' ?>><?= e($s) ?></option>
-              <?php endforeach; ?>
-            </select>
+                    <?php
+                $workflowMap = [
+            'All'               => 'All',
+            'FOR PDAO REVIEW'   => 'pdao_review',
+            'FOR CHO REVIEW'    => 'cho_review',
+        ];
+        ?>
+
+        <select name="status" class="form-select" style="width:200px;">
+            <?php foreach ($workflowMap as $label => $value): ?>
+                <option value="<?= e($label) ?>" <?= ($status === $label) ? 'selected' : '' ?>>
+                    <?= e($label) ?>
+                </option>
+            <?php endforeach; ?>
+        </select>
+
 
             <button class="btn btn-primary">Filter</button>
           </form>
 
-          <a href="<?= rtrim(APP_BASE_URL, '/') . '/src/admin_side/export_applications.php?' . buildQuery() ?>"
-            class="btn btn-outline-secondary btn-sm">
-            <i class="fas fa-file-csv me-1"></i> Export CSV
-          </a>
+         
         </div>
 
         <?php if ($fetch_error): ?>
@@ -251,7 +345,7 @@ $curPage = basename($_SERVER['SCRIPT_NAME']);
                     <th>Applicant Name</th>
                     <th>Application Type</th>
                     <th>Date Submitted</th>
-                    <th style="width:140px;">Action</th>
+                    <th style="width:180px;">Action</th>
                   </tr>
                 </thead>
 
@@ -260,7 +354,7 @@ $curPage = basename($_SERVER['SCRIPT_NAME']);
                   $fullName = e(trim("{$row['last_name']}, {$row['first_name']} {$row['middle_name']}"));
                   $applicationType = e(ucfirst((string)($row['application_type'] ?? '')));
                   $date = $row['application_date'] ?? null;
-                  $dateFmt = $date ? date('M d, Y \a\t H:i', strtotime($date)) : '';
+                  $dateFmt = $date ? date('M d, Y', strtotime($date)) : '';
                   $viewUrl = rtrim(APP_BASE_URL, '/') . '/src/admin_side/view_a.php?id=' . urlencode($row['application_id']);
                 ?>
                   <tr>
@@ -268,9 +362,29 @@ $curPage = basename($_SERVER['SCRIPT_NAME']);
                     <td><?= $applicationType ?></td>
                     <td><?= $dateFmt ?></td>
                     <td>
-                      <a href="<?= $viewUrl ?>" class="view-link" style="font-weight:500;">
-                        <i class="fas fa-eye"></i>&nbsp;View Application
-                      </a>
+                      
+                    <div class="action-buttons">
+
+                        <!-- VIEW -->
+                        <a href="<?= $viewUrl ?>" class="btn-soft btn-view">
+                            <i class="fas fa-eye"></i>
+                            <span>View</span>
+                        </a>
+
+                        <!-- DELETE -->
+                        <?php if (($_SESSION['role'] ?? '') === 'super_admin'): ?>
+                            <a href="#"
+                          class="btn-soft btn-delete delete-btn"
+                          data-id="<?= $row['application_id'] ?>">
+                          <i class="fas fa-trash"></i>
+                          <span>Delete</span>
+                        </a>
+                        <?php endif; ?>
+
+                    </div>
+
+                </td>
+
                     </td>
                   </tr>
                 <?php endforeach; ?>
@@ -307,48 +421,54 @@ $curPage = basename($_SERVER['SCRIPT_NAME']);
       </div>
     </div>
   </main>
+   </div>
 
-  </div> <!-- wrapper -->
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 
-  <script>
-  document.addEventListener('DOMContentLoaded', () => {
-    const toggles = document.querySelectorAll('.submenu-toggle');
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+  
 
-    function openSub(parent) {
-      const submenu = parent.querySelector('.submenu'); if (!submenu) return;
-      submenu.style.maxHeight = submenu.scrollHeight + 'px';
-      parent.classList.add('open');
-      parent.querySelector('.chevron-icon').classList.add('rotate');
-    }
+  
+   <script>
+document.querySelectorAll('.delete-btn').forEach(btn => {
+    btn.addEventListener('click', function(e) {
+        e.preventDefault();
 
-    function closeSub(parent) {
-      const submenu = parent.querySelector('.submenu'); if (!submenu) return;
-      submenu.style.maxHeight = '0px';
-      parent.classList.remove('open');
-      parent.querySelector('.chevron-icon').classList.remove('rotate');
-    }
+        const appId = this.getAttribute('data-id');
 
-    toggles.forEach(toggle => {
-      toggle.addEventListener('click', () => {
-        const parent = toggle.closest('.sidebar-item');
-        if (parent.classList.contains('open')) closeSub(parent);
-        else {
-          document.querySelectorAll('.sidebar-item.open').forEach(p => closeSub(p));
-          openSub(parent);
-        }
-      });
+        Swal.fire({
+            title: 'Delete Application?',
+            text: "This action cannot be undone.",
+            icon: 'warning',
+            showCancelButton: true,
+            confirmButtonColor: '#ef4444',
+            cancelButtonColor: '#6b7280',
+            confirmButtonText: 'Yes, delete it',
+            cancelButtonText: 'Cancel',
+            background: '#fff',
+            borderRadius: '10px'
+        }).then((result) => {
+            if (result.isConfirmed) {
+                window.location.href = '?delete_app=' + appId;
+            }
+        });
     });
+});
+</script>
 
-    // auto-open when inside manage apps
-    const path = location.pathname.toLowerCase();
-    if (path.includes('application_review') || path.includes('/accepted') || path.includes('/pending') || path.includes('/denied')) {
-      const ma = document.querySelector('.submenu-toggle');
-      if (ma) openSub(ma.closest('.sidebar-item'));
-    }
-  });
-  </script>
+<script>
+<?php if (isset($_GET['deleted'])): ?>
+Swal.fire({
+    icon: 'success',
+    title: 'Deleted!',
+    text: 'Application has been removed.',
+    timer: 2000,
+    showConfirmButton: false
+});
+<?php endif; ?>
+</script>
+
 
 </body>
 </html>

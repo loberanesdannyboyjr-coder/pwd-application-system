@@ -106,6 +106,15 @@ $docs_sql = "SELECT * FROM documentrequirements WHERE application_id = $1 LIMIT 
 $docs_res = @pg_query_params($conn, $docs_sql, [$app_id]);
 if ($docs_res && pg_num_rows($docs_res) > 0) $docs = pg_fetch_assoc($docs_res);
 
+/* ---------------- certification (CHO certificate) ------------------ */
+$cert = null;
+$cert_sql = "SELECT pwd_cert_path FROM certification WHERE application_id = $1 LIMIT 1";
+$cert_res = @pg_query_params($conn, $cert_sql, [$app_id]);
+
+if ($cert_res && pg_num_rows($cert_res) > 0) {
+    $cert = pg_fetch_assoc($cert_res);
+}
+
 /* ---------------- application_draft rows (merge JSON data) ------------------ */
 $draft_json_merged = [];
 $draft_q = "SELECT data, step FROM application_draft WHERE application_id = $1 ORDER BY step ASC, updated_at ASC";
@@ -151,13 +160,28 @@ if (empty($draftData['application_date'])) $draftData['application_date'] = $app
 /* ---------- build files list (exclude redundant 1x1 in files) ---------- */
 $draftData['files'] = [];
 $map_docs = [
-    'bodypic_path'    => 'Whole Body Picture',
-    'medicalcert_path'=> 'Medical Certificate',
-    'barangaycert_path'=> 'Barangay Certificate',
+    'bodypic_path' => 'Whole Body Picture',
+    'barangaycert_path' => 'Barangay Certificate',
+    'proof_disability_path'=> 'Proof of Disability',
+    'medicalcert_path' => 'Medical Certificate',
     'old_pwd_id_path' => 'Old PWD ID',
-    'affidavit_loss_path' => 'Affidavit of Loss',
-    'cho_cert_path'   => 'CHO Certificate'
+    'affidavit_loss_path' => 'Affidavit of Loss'
 ];
+
+/* ---------- add CHO issued certificate ---------- */
+
+if (!empty($cert['pwd_cert_path'])) {
+
+    $stored = $cert['pwd_cert_path'];
+
+    $draftData['files'][] = [
+        'label' => 'PWD Certificate',
+        'path'  => $stored,
+        'url'   => build_url_from_stored($stored),
+        'server_candidates' => server_path_candidates($stored),
+        'server_found' => find_first_existing(server_path_candidates($stored))
+    ];
+}
 if ($docs) {
     foreach ($map_docs as $col => $label) {
         if (!empty($docs[$col])) {
@@ -229,6 +253,17 @@ $hist_sql = "SELECT hist_id, from_status, to_status, changed_by, role, remarks, 
 $hist_res = @pg_query_params($conn, $hist_sql, [$app_id]);
 $history_rows = $hist_res && pg_num_rows($hist_res) ? pg_fetch_all($hist_res) : [];
 
+$latestRemark = '';
+
+if (!empty($history_rows)) {
+    foreach (array_reverse($history_rows) as $h) {
+        if (!empty($h['remarks'])) {
+            $latestRemark = $h['remarks'];
+            break;
+        }
+    }
+}
+
 
 
 /* ---------------- Render HTML ------------------ */
@@ -281,6 +316,13 @@ $history_rows = $hist_res && pg_num_rows($hist_res) ? pg_fetch_all($hist_res) : 
         }
         ?>
 
+            <?php if (!empty($latestRemark)): ?>
+        <div class="alert alert-danger mt-3">
+        <strong>Doctor's Remarks:</strong><br>
+        <?= h($latestRemark) ?>
+        </div>
+        <?php endif; ?>
+
         <!-- CHO action form -->
         <?php
                 $canTakeAction = (
@@ -310,6 +352,7 @@ $history_rows = $hist_res && pg_num_rows($hist_res) ? pg_fetch_all($hist_res) : 
           <a href="<?= h((defined('APP_BASE_URL') ? rtrim(APP_BASE_URL, '/') : '') . '/src/doctor/applications.php') ?>" class="btn btn-outline-secondary">Back to list</a>
         </div>
         <?php endif; ?>
+
 
       </div>
     </div>

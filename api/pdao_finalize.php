@@ -1,70 +1,122 @@
 <?php
-// api/pdao_finalize.php
+declare(strict_types=1);
+
 session_start();
-header('Content-Type: application/json');
-require_once __DIR__ . '/../config/db.php';
 
-if (empty($_SESSION['user_id']) || empty($_SESSION['is_admin'])) {
-    http_response_code(403);
-    echo json_encode(['error'=>'Not authorized']);
+require_once __DIR__.'/../../config/db.php';
+require_once __DIR__.'/../../config/paths.php';
+require_once __DIR__.'/../../includes/draftMigration.php';
+
+/* ===============================
+   AUTH CHECK
+================================ */
+
+$role = strtoupper($_SESSION['role'] ?? '');
+
+if (!isset($_SESSION['username']) || !in_array($role,['PDAO','ADMIN'],true)) {
+    header('Location: '.APP_BASE_URL.'/backend/auth/login.php');
     exit;
 }
 
-$admin_id = (int)$_SESSION['user_id'];
-$appId = (int)($_POST['application_id'] ?? 0);
-$pwd_id = trim($_POST['pwd_id'] ?? '');
-$remarks = trim($_POST['remarks'] ?? '');
+/* ===============================
+   INPUT
+================================ */
 
-if (!$appId || $pwd_id === '') {
-    http_response_code(400);
-    echo json_encode(['error'=>'Missing parameters']);
-    exit;
+$application_id = (int)($_POST['application_id'] ?? 0);
+$pwd_number     = trim($_POST['pwd_number'] ?? '');
+
+if(!$application_id || !$pwd_number){
+    die("Invalid request.");
 }
 
-pg_query($conn, 'BEGIN');
-try {
-    // lock and get applicant_id
-    $res = pg_query_params($conn, "SELECT workflow_status, applicant_id FROM application WHERE application_id = $1 FOR UPDATE", [$appId]);
-    if (!$res || pg_num_rows($res) === 0) throw new Exception('Application not found');
-    $row = pg_fetch_assoc($res);
-    $from = $row['workflow_status'] ?? null;
-    $applicant_id = isset($row['applicant_id']) ? (int)$row['applicant_id'] : null;
+/* ===============================
+   DUPLICATE CHECK
+================================ */
 
-    // update application
-    $upd = pg_query_params($conn,
-        "UPDATE application
-         SET workflow_status = 'approved',
-             status = 'Approved',
-             final_pwd_id = $1,
-             approved_by = $2,
-             approved_at = CURRENT_TIMESTAMP,
-             remarks = $3,
-             updated_at = CURRENT_TIMESTAMP
-         WHERE application_id = $4",
-        [$pwd_id, $admin_id, $remarks, $appId]
-    );
-    if ($upd === false) throw new Exception('Failed to update application');
+$dup = pg_query_params(
+    $conn,
+    "SELECT applicant_id FROM applicant WHERE pwd_number=$1",
+    [$pwd_number]
+);
 
-    // update applicant table (if exists)
-    if ($applicant_id) {
-        pg_query_params($conn, "UPDATE applicant SET pwd_number = $1 WHERE applicant_id = $2", [$pwd_id, $applicant_id]);
-    }
-
-    // insert history
-    $ins = pg_query_params($conn,
-        "INSERT INTO application_status_history(application_id, from_status, to_status, changed_by, role, remarks)
-         VALUES($1, $2, 'approved', $3, 'pdao_admin', $4)",
-        [$appId, $from, $admin_id, $remarks]
-    );
-    if ($ins === false) throw new Exception('Failed to insert history');
-
-    pg_query($conn, 'COMMIT');
-
-    echo json_encode(['success'=>true, 'pwd_id'=>$pwd_id]);
-    exit;
-} catch (Exception $e) {
-    pg_query($conn, 'ROLLBACK');
-    http_response_code(500);
-    echo json_encode(['error'=>$e->getMessage()]);
-    exit;
+if(pg_num_rows($dup) > 0){
+    die("PWD number already exists.");
 }
+
+/* ===============================
+   GET APPLICATION
+================================ */
+
+$appRes = pg_query_params(
+    $conn,
+    "SELECT applicant_id FROM application WHERE application_id=$1",
+    [$application_id]
+);
+
+$app = pg_fetch_assoc($appRes);
+
+if(!$app){
+    die("Application not found.");
+}
+
+$applicant_id = $app['applicant_id'];
+
+/* ===============================
+   START TRANSACTION
+================================ */
+
+pg_query($conn,"BEGIN");
+
+/* ===============================
+   UPDATE PWD NUMBER
+================================ */
+
+pg_query_params(
+$conn,
+"UPDATE applicant
+SET pwd_number=$1
+WHERE applicant_id=$2",
+[
+$pwd_number,
+$applicant_id
+]
+);
+
+/* ===============================
+   MIGRATE DRAFT DATA
+================================ */
+
+migrateDraftToOfficial($conn,$application_id,$applicant_id);
+
+/* ===============================
+   FINAL APPROVAL
+================================ */
+
+$admin_id = $_SESSION['user_id'] ?? null;
+
+pg_query_params(
+$conn,
+"UPDATE application
+SET
+workflow_status='pdao_approved',
+approved_at=NOW(),
+approved_by=$1
+WHERE application_id=$2",
+[
+$admin_id,
+$application_id
+]
+);
+
+/* ===============================
+   COMMIT
+================================ */
+
+pg_query($conn,"COMMIT");
+
+/* ===============================
+   REDIRECT
+================================ */
+
+header("Location: ".APP_BASE_URL."/src/admin_side/members.php");
+exit;

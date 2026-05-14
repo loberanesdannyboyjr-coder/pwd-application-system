@@ -6,9 +6,8 @@ session_start();
 require_once __DIR__ . '/../../config/db.php';
 require_once __DIR__ . '/../../config/paths.php';
 
-/* ---------------- AUTH CHECK ---------------- */
-if (!isset($_SESSION['username']) || !in_array($_SESSION['role'] ?? '', ['PDAO','ADMIN'])) {
-    header('Location: ' . APP_BASE_URL . '/backend/auth/login.php');
+if (!isset($_SESSION['username']) || !in_array($_SESSION['role'] ?? '', ['admin', 'super_admin'])) {
+        header('Location: ' . ADMIN_BASE . '/signin.php');
     exit;
 }
 

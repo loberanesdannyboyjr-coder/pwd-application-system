@@ -5,10 +5,11 @@ require_once __DIR__ . '/../../config/paths.php';
 session_start();
 
 // --- 1) auth: must be admin ---
-if (empty($_SESSION['user_id']) || empty($_SESSION['is_admin'])) {
-    http_response_code(403);
-    // redirect to signin or show message
-    header('Location: ' . rtrim(APP_BASE_URL, '/') . '/admin/signin.php');
+if (
+    empty($_SESSION['user_id']) ||
+    !in_array($_SESSION['role'] ?? '', ['admin', 'super_admin'])
+) {
+    header('Location: ' . ADMIN_BASE . '/signin.php');
     exit;
 }
 

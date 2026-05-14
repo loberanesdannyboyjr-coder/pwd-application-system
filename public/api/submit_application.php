@@ -87,6 +87,62 @@ if (!$upd || pg_affected_rows($upd) === 0) {
     throw new Exception('Failed to update application');
 }
 
+/* =========================================
+   COPY STEP 1 DATA → applicant
+========================================= */
+$resDraft = pg_query_params(
+    $conn,
+    "SELECT data
+     FROM application_draft
+     WHERE application_id = $1 AND step = 1
+     LIMIT 1",
+    [$application_id]
+);
+
+if ($resDraft && pg_num_rows($resDraft) > 0) {
+
+    $draftRow = pg_fetch_assoc($resDraft);
+    $data = json_decode($draftRow['data'], true);
+
+    pg_query_params(
+        $conn,
+        "UPDATE applicant SET
+            first_name      = $1,
+            middle_name     = $2,
+            last_name       = $3,
+            birthdate       = $4,
+            sex             = $5,
+            civil_status    = $6,
+            house_no_street = $7,
+            barangay        = $8,
+            municipality    = $9,
+            province        = $10,
+            region          = $11,
+            landline_no     = $12,
+            mobile_no       = $13,
+            email_address   = $14,
+            updated_at      = NOW()
+        WHERE applicant_id = $15",
+        [
+            $data['first_name'] ?? null,
+            $data['middle_name'] ?? null,
+            $data['last_name'] ?? null,
+            $data['birthdate'] ?? null,
+            $data['sex'] ?? null,
+            $data['civil_status'] ?? null,
+            $data['house_no_street'] ?? null,
+            $data['barangay'] ?? null,
+            $data['municipality'] ?? null,
+            $data['province'] ?? null,
+            $data['region'] ?? null,
+            $data['landline_no'] ?? null,
+            $data['mobile_no'] ?? null,
+            $data['email_address'] ?? null,
+            $applicant_id
+        ]
+    );
+}
+
 
     // History
     $hist = pg_query_params(

@@ -22,6 +22,36 @@ $_SESSION['application_type'] = $type;
 $step = 3;
 $draftData = loadDraftData($step, $application_id);
 
+$step = 3;
+$draftData = loadDraftData($step, $application_id);
+
+// 🔥 ADD THIS BLOCK HERE
+if ($type !== 'new') {
+
+    $res = pg_query_params(
+        $conn,
+        "SELECT ad.data
+         FROM application a
+         JOIN application_draft ad 
+           ON a.application_id = ad.application_id
+         WHERE a.applicant_id = $1
+           AND a.workflow_status = 'pdao_approved'
+           AND ad.step = 3
+         ORDER BY a.created_at DESC
+         LIMIT 1",
+        [$applicant_id]
+    );
+
+    if ($res && pg_num_rows($res) > 0) {
+        $row = pg_fetch_assoc($res);
+
+        $approvedData = json_decode($row['data'], true);
+
+        // 🔥 merge approved + current draft
+        $draftData = array_merge($approvedData, $draftData ?? []);
+    }
+}
+
 // 🔒 LOCK FORM IF ALREADY SUBMITTED
 if (($draftData['workflow_status'] ?? 'draft') !== 'draft') {
     http_response_code(403);
@@ -49,6 +79,13 @@ $_SESSION['max_step'] = $_SESSION['max_step'] ?? 1;
 if ($_SESSION['max_step'] < $currentStep) {
     $_SESSION['max_step'] = $currentStep;
 }
+
+$isLocked = ($type === 'renew' || $type === 'lost');
+
+$editableFields = [
+    'contact_person_name',
+    'contact_person_no'
+];
 
 ?>
 <!DOCTYPE html>
@@ -155,11 +192,12 @@ if ($_SESSION['max_step'] < $currentStep) {
           Contact Person’s Name
         </label>
         <input
-          type="text"
-          class="form-control"
-          name="contact_person_name"
-          required
-          value="<?= htmlspecialchars($draftData['contact_person_name'] ?? '') ?>">
+            type="text"
+            class="form-control"
+            name="contact_person_name"
+            required
+            value="<?= htmlspecialchars($draftData['contact_person_name'] ?? '') ?>"
+            <?= (!in_array('contact_person_name', $editableFields) && $isLocked) ? 'readonly' : '' ?>>
       </div>
 
     <div class="col-md-6">
@@ -176,7 +214,8 @@ if ($_SESSION['max_step'] < $currentStep) {
         maxlength="11"
         placeholder="09XXXXXXXXX"
         title="Please enter an 11-digit mobile number"
-        value="<?= htmlspecialchars($draftData['contact_person_no'] ?? '') ?>">
+        value="<?= htmlspecialchars($draftData['contact_person_no'] ?? '') ?>"
+        <?= (!in_array('contact_person_no', $editableFields) && $isLocked) ? 'readonly' : '' ?>>
           </div>
     </div>
 

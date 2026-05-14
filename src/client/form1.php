@@ -10,23 +10,16 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['applicant_id'])) {
 
 $applicant_id = (int)$_SESSION['applicant_id'];
 
-
-
 /** -------------------------------
  * Resolve application type (url -> post -> session)
  * and normalize to: new | renew | lost
  * ------------------------------- */
 $type = strtolower($_GET['type'] ?? $_POST['type'] ?? ($_SESSION['application_type'] ?? 'new'));
-if ($type === 'renewal') $type = 'renew';
 if (!in_array($type, ['new','renew','lost'], true)) $type = 'new';
 $_SESSION['application_type'] = $type;
 
-/** Map to DB enum */
-$appTypeEnum = match ($type) {
-  'new'   => 'New',
-  'renew' => 'Renewal',
-  'lost'  => 'Lost ID',
-};
+/**fixing */
+$appTypeEnum = $type;
 
 /** -------------------------------
  * Ensure we have an in-progress 
@@ -81,16 +74,53 @@ if (empty($_SESSION['application_id'])) {
 
 $application_id = (int)$_SESSION['application_id'];
 
+/* GET PWD NUMBER (FOR DISPLAY)*/
+
+$res = pg_query_params(
+    $conn,
+    "SELECT pwd_number FROM applicant WHERE applicant_id = $1",
+    [$applicant_id]
+);
+
+$pwdNumber = ($res && pg_num_rows($res))
+    ? pg_fetch_result($res, 0, 'pwd_number')
+    : '';
+
 /** -------------------------------
  * Load Step 1 draft (for preload)
  * ------------------------------- */
 $step = 1;
 $draftData = loadDraftData($step, $application_id) ?? [];
 
-// 🔒 LOCK FORM IF ALREADY SUBMITTED
-if (($draftData['workflow_status'] ?? 'draft') !== 'draft') {
-    http_response_code(403);
-    exit('Application already submitted. Editing is disabled.');
+/* =================================
+   PRELOAD DATA FOR RENEW / LOST
+   FROM APPROVED APPLICATION (NOT applicant table)
+================================= */
+if ($type !== 'new') {
+
+    $res = pg_query_params(
+        $conn,
+        "SELECT ad.data
+        FROM application a
+        JOIN application_draft ad 
+          ON a.application_id = ad.application_id
+        WHERE a.applicant_id = $1
+          AND a.workflow_status = 'pdao_approved'
+          AND ad.step = 1
+        ORDER BY a.created_at DESC
+        LIMIT 1",
+        [$applicant_id]
+    );
+
+    if ($res && pg_num_rows($res) > 0) {
+        $row = pg_fetch_assoc($res);
+
+        // ✅ decode JSON from "data" column
+        $approvedData = json_decode($row['data'], true);
+
+        // ✅ merge with current draft
+        $draftData = array_merge($approvedData, $draftData ?? []);
+    }
 }
 
 
@@ -124,44 +154,71 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
-    // ---- 1x1 photo (optional) -> save to application + draft ----
-    if (isset($_FILES['pic_1x1']) && $_FILES['pic_1x1']['error'] === UPLOAD_ERR_OK) {
-        $fsDir  = realpath(__DIR__ . '/../../') . '/uploads/';
-        $webDir = '/uploads/';
-        if (!is_dir($fsDir)) { mkdir($fsDir, 0777, true); }
+// ---- 1x1 photo (optional) -> save to application + draft ----
+if (isset($_FILES['pic_1x1']) && $_FILES['pic_1x1']['error'] === UPLOAD_ERR_OK) {
 
-        $ext = strtolower(pathinfo($_FILES['pic_1x1']['name'], PATHINFO_EXTENSION));
-        if (in_array($ext, ['jpg','jpeg','png','gif','webp'], true)) {
-            $file = time() . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
-            $fs   = $fsDir . $file;
-            $web  = $webDir . $file;
-            if (move_uploaded_file($_FILES['pic_1x1']['tmp_name'], $fs)) {
-                $pic1x1Path = $web;
-                // persist on application row
-                pg_query_params(
+    $fsDir  = realpath(__DIR__ . '/../../') . '/uploads/';
+    $webDir = '/uploads/';
+    if (!is_dir($fsDir)) { mkdir($fsDir, 0777, true); }
+
+    // 🔍 Get old file path (if any)
+    $oldRes = pg_query_params(
+        $conn,
+        "SELECT pic_1x1_path
+           FROM documentrequirements
+          WHERE application_id = $1",
+        [$application_id]
+    );
+    $oldPath = $oldRes && pg_num_rows($oldRes) > 0
+        ? pg_fetch_result($oldRes, 0, 'pic_1x1_path')
+        : null;
+
+    // Validate extension
+    $ext = strtolower(pathinfo($_FILES['pic_1x1']['name'], PATHINFO_EXTENSION));
+    if (in_array($ext, ['jpg','jpeg','png','gif','webp'], true)) {
+
+        $file = time() . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
+        $fs   = $fsDir . $file;
+        $web  = $webDir . $file;
+
+        //Upload new file first
+        if (move_uploaded_file($_FILES['pic_1x1']['tmp_name'], $fs)) {
+
+            // 💾 Save new path to DB
+            pg_query_params(
                 $conn,
                 "INSERT INTO documentrequirements (application_id, pic_1x1_path)
-                VALUES ($1, $2)
-                ON CONFLICT (application_id)
-                DO UPDATE SET pic_1x1_path = EXCLUDED.pic_1x1_path",
+                 VALUES ($1, $2)
+                 ON CONFLICT (application_id)
+                 DO UPDATE SET pic_1x1_path = EXCLUDED.pic_1x1_path",
                 [$application_id, $web]
-                 );
-                // also in draft for preload
-                $formData['pic_1x1_path'] = $web;
+            );
+
+            // 🧹 Delete old file (if different)
+            if ($oldPath && $oldPath !== $web) {
+                $oldFs = realpath(__DIR__ . '/../../') . $oldPath;
+                if ($oldFs && file_exists($oldFs)) {
+                    unlink($oldFs);
+                }
             }
+
+            // Store in draft
+            $formData['pic_1x1_path'] = $web;
+            $pic1x1Path = $web;
         }
     }
+}
 
     // If no new upload, keep whatever was already in draft
     if (empty($formData['pic_1x1_path']) && !empty($draftData['pic_1x1_path'])) {
         $formData['pic_1x1_path'] = $draftData['pic_1x1_path'];
     }
 
-    if (empty($formData['pic_1x1_path'])) {
-    $_SESSION['error'] = '1x1 photo is required.';
-    header("Location: form1.php?type=" . urlencode($type));
-    exit;
-}
+// if (empty($formData['pic_1x1_path'])) {
+//     $_SESSION['error'] = '1x1 photo is required.';
+//     header("Location: form1.php?type=" . urlencode($type));
+//     exit;
+// }
 
 
     // Save entire step-1 payload (JSONB merge in DraftHelper)
@@ -188,8 +245,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         'pic_1x1_path'     => $formData['pic_1x1_path'] ?? null,
     ];
 
-    $_SESSION['causedetail'] = [ 'cause_detail' => $_POST['cause'] ?? null ];
     $_SESSION['causedisability'] = [ 'cause_disability' => $_POST['cause_description'] ?? null ];
+    $_SESSION['causedetail'] = [ 'cause_detail' => $_POST['cause'] ?? null ];
     $_SESSION['disability'] = [ 'disability_type' => $_POST['disability_type'] ?? null ];
 
     // useful if you reference later
@@ -203,6 +260,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 $currentStep = 1;
 
+$isRenew = $type === 'renew';
+$isLost  = $type === 'lost';
+
 // This controls how far the user is allowed to click
 $_SESSION['max_step'] = $_SESSION['max_step'] ?? 1;
 
@@ -211,10 +271,9 @@ if ($_SESSION['max_step'] < $currentStep) {
     $_SESSION['max_step'] = $currentStep;
 }
 
+$isLocked = ($type === 'renew' || $type === 'lost');
 
 ?>
-
-
 
 
 <!DOCTYPE html>
@@ -268,11 +327,11 @@ if ($_SESSION['max_step'] < $currentStep) {
 
 
 <main class="form-container">
-   <form id="appForm" method="POST" action="form1.php" enctype="multipart/form-data">
+   <form method="POST" action="form1.php?type=<?= htmlspecialchars($type) ?>" enctype="multipart/form-data">
     <!-- Row 1 -->
     <div class="row g-3 mb-3">
       <?php
-        $applicationType = isset($_GET['type']) ? $_GET['type'] : 'new';
+        $applicationType = $type;
         $_SESSION['application_type'] = $applicationType;
 
 
@@ -298,8 +357,9 @@ if ($_SESSION['max_step'] < $currentStep) {
         <input
           type="text"
           class="form-control"
+          htmlspecialchars($value ?? '')
           placeholder="To be filled by PDAO once approved"
-          disabled>
+          readonly>
       </div>
 
       <div class="col-md-3">
@@ -352,7 +412,8 @@ if ($_SESSION['max_step'] < $currentStep) {
       id="last_name"
       class="form-control"
       required
-      value="<?= htmlspecialchars($draftData['last_name'] ?? '') ?>">
+      value="<?= htmlspecialchars($draftData['last_name'] ?? '') ?>"
+      <?= ($isRenew || $isLost) ? 'readonly' : '' ?>>
   </div>
 
   <div class="col-md-3">
@@ -362,8 +423,8 @@ if ($_SESSION['max_step'] < $currentStep) {
       name="first_name"
       id="first_name"
       class="form-control"
-      required
-      value="<?= htmlspecialchars($draftData['first_name'] ?? '') ?>">
+      value="<?= htmlspecialchars($draftData['first_name'] ?? '') ?>"
+      <?= ($isRenew || $isLost) ? 'readonly' : '' ?>>
   </div>
 
   <div class="col-md-3">
@@ -374,7 +435,8 @@ if ($_SESSION['max_step'] < $currentStep) {
       id="middle_name"
       class="form-control"
       required
-      value="<?= htmlspecialchars($draftData['middle_name'] ?? '') ?>">
+      value="<?= htmlspecialchars($draftData['middle_name'] ?? '') ?>"
+      <?= ($isRenew || $isLost) ? 'readonly' : '' ?>>
   </div>
 
   <div class="col-md-3">
@@ -384,142 +446,101 @@ if ($_SESSION['max_step'] < $currentStep) {
       name="suffix"
       id="suffix"
       class="form-control"
-      value="<?= htmlspecialchars($draftData['suffix'] ?? '') ?>">
+      value="<?= htmlspecialchars($draftData['suffix'] ?? '') ?>"
+        <?= ($isRenew || $isLost) ? 'readonly' : '' ?>>
   </div>
 </div>
 
-      <!-- Row 3 -->
-  <div class="row g-3 mb-3">
-    <div class="col-md-3">
-      <label class="form-label fw-semibold required">Date of Birth</label>
-      <input
-        type="date"
-        name="birthdate"
-        class="form-control"
-        required
-        value="<?= htmlspecialchars($draftData['birthdate'] ?? '') ?>">
-
-    </div>
-        <div class="col-md-3">
-          <label class="form-label fw-semibold required">Sex</label>
-          <select name="sex" class="form-select" required>
-            <option value="">Please Select</option>
-            <option value="Male" <?= ($draftData['sex'] ?? '') === 'Male' ? 'selected' : '' ?>>Male</option>
-            <option value="Female" <?= ($draftData['sex'] ?? '') === 'Female' ? 'selected' : '' ?>>Female</option>
-          </select> 
-
-        </div>
-        <div class="col-md-3">
-        <label class="form-label fw-semibold required">Civil Status</label>
-        <select name="civil_status" class="form-select" required>
-          <option value="">Please Select</option>
-          <option value="Single" <?= ($draftData['civil_status'] ?? '') === 'Single' ? 'selected' : '' ?>>Single</option>
-          <option value="Married" <?= ($draftData['civil_status'] ?? '') === 'Married' ? 'selected' : '' ?>>Married</option>
-          <option value="Separated" <?= ($draftData['civil_status'] ?? '') === 'Separated' ? 'selected' : '' ?>>Separated</option>
-          <option value="Widow/er" <?= ($draftData['civil_status'] ?? '') === 'Widow/er' ? 'selected' : '' ?>>Widow/er</option>
-        </select>
-
-          </select>
-        </div>
-        <div class="col-md-3">
-          <label class="form-label fw-semibold required">Type of Disability</label>
-              <select name="disability_type" class="form-select" required>
-             <option value="">Please Select</option>
-              <option value="Deaf or Hard of Hearing" <?= ($draftData['disability_type'] ?? '') === 'Deaf or Hard of Hearing' ? 'selected' : '' ?>>Deaf or Hard of Hearing</option>
-              <option value="Intellectual Disability" <?= ($draftData['disability_type'] ?? '') === 'Intellectual Disability' ? 'selected' : '' ?>>Intellectual Disability</option>
-              <option value="Learning Disability" <?= ($draftData['disability_type'] ?? '') === 'Learning Disability' ? 'selected' : '' ?>>Learning Disability</option>
-              <option value="Mental Disability" <?= ($draftData['disability_type'] ?? '') === 'Mental Disability' ? 'selected' : '' ?>>Mental Disability</option>
-              <option value="Physical Disability (Orthopedic)" <?= ($draftData['disability_type'] ?? '') === 'Physical Disability (Orthopedic)' ? 'selected' : '' ?>>Physical Disability (Orthopedic)</option>
-              <option value="Psychosocial Disability" <?= ($draftData['disability_type'] ?? '') === 'Psychosocial Disability' ? 'selected' : '' ?>>Psychosocial Disability</option>
-              <option value="Speech and Language Impairment" <?= ($draftData['disability_type'] ?? '') === 'Speech and Language Impairment' ? 'selected' : '' ?>>Speech and Language Impairment</option>
-              <option value="Visual Disability" <?= ($draftData['disability_type'] ?? '') === 'Visual Disability' ? 'selected' : '' ?>>Visual Disability</option>
-              <option value="Cancer (RA11215)" <?= ($draftData['disability_type'] ?? '') === 'Cancer (RA11215)' ? 'selected' : '' ?>>Cancer (RA11215)</option>
-              <option value="Rare Disease (RA10747)" <?= ($draftData['disability_type'] ?? '') === 'Rare Disease (RA10747)' ? 'selected' : '' ?>>Rare Disease (RA10747)</option>
-            </select>
-        </div>
-      </div>
-
-<!-- Row 4 -->
-<div class="row g-3 mb-3 align-items-end">
-  <!-- Cause of Disability -->
+<div class="row g-3 mb-3">
   <div class="col-md-3">
-    <label class="form-label fw-semibold text-primary required">
-      Cause of Disability
-    </label>
+    <label class="form-label fw-semibold required">Date of Birth</label>
+    <input type="date" name="birthdate" class="form-control"
+      value="<?= htmlspecialchars($draftData['birthdate'] ?? '') ?>"
+      <?= ($isRenew || $isLost) ? 'readonly' : '' ?> required>
+  </div>
 
-    <div class="d-flex gap-3 mb-2" style="font-size: 0.75rem;">
-      <div class="form-check mb-0">
-        <input
-          class="form-check-input"
-          type="radio"
-          id="causeCongenital"
-          name="cause"
-          value="Congenital/Inborn"
-          required
-          onchange="updateOptions(this.value)"
-          <?= ($draftData['cause_detail'] ?? '') === 'Congenital/Inborn' ? 'checked' : '' ?>>
-        <label class="form-check-label" for="causeCongenital">
-          Congenital/Inborn
-        </label>
-      </div>
+  <div class="col-md-3">
+    <label class="form-label fw-semibold required">Sex</label>
+    <select name="sex" class="form-select" required <?= ($isRenew || $isLost) ? 'readonly' : '' ?>>
+      <option value="">Please Select</option>
+      <option value="Male" <?= ($draftData['sex'] ?? '') === 'Male' ? 'selected' : '' ?>>Male</option>
+      <option value="Female" <?= ($draftData['sex'] ?? '') === 'Female' ? 'selected' : '' ?>>Female</option>
+    </select>
+  </div>
 
-      <div class="form-check mb-0">
-        <input
-          class="form-check-input"
-          type="radio"
-          id="causeAcquired"
-          name="cause"
-          value="Acquired"
-          required
+  <div class="col-md-3">
+    <label class="form-label fw-semibold required">Civil Status</label>
+    <select name="civil_status" class="form-select" required <?= ($isRenew || $isLost) ? 'readonly' : '' ?>>
+      <option value="">Please Select</option>
+      <option value="Single" <?= ($draftData['civil_status'] ?? '') === 'Single' ? 'selected' : '' ?>>Single</option>
+      <option value="Married" <?= ($draftData['civil_status'] ?? '') === 'Married' ? 'selected' : '' ?>>Married</option>
+      <option value="Separated" <?= ($draftData['civil_status'] ?? '') === 'Separated' ? 'selected' : '' ?>>Separated</option>
+      <option value="Widow/er" <?= ($draftData['civil_status'] ?? '') === 'Widow/er' ? 'selected' : '' ?>>Widow/er</option>
+    </select>
+  </div>
+
+<div class="col-md-3">
+  <label class="form-label fw-semibold required">Type of Disability</label>
+  <select name="disability_type" class="form-select" required>
+
+    <option value="" <?= empty($draftData['disability_type']) ? 'selected' : '' ?>>
+      Please Select
+    </option>
+
+    <option value="Physical" <?= ($draftData['disability_type'] ?? '') === 'Physical' ? 'selected' : '' ?>>Physical</option>
+    <option value="Visual" <?= ($draftData['disability_type'] ?? '') === 'Visual' ? 'selected' : '' ?>>Visual</option>
+    <option value="Hearing" <?= ($draftData['disability_type'] ?? '') === 'Hearing' ? 'selected' : '' ?>>Hearing</option>
+    <option value="Speech" <?= ($draftData['disability_type'] ?? '') === 'Speech' ? 'selected' : '' ?>>Speech</option>
+    <option value="Intellectual" <?= ($draftData['disability_type'] ?? '') === 'Intellectual' ? 'selected' : '' ?>>Intellectual</option>
+    <option value="Psychosocial" <?= ($draftData['disability_type'] ?? '') === 'Psychosocial' ? 'selected' : '' ?>>Psychosocial</option>
+    <option value="Multiple" <?= ($draftData['disability_type'] ?? '') === 'Multiple' ? 'selected' : '' ?>>Multiple</option>
+    <option value="Others" <?= ($draftData['disability_type'] ?? '') === 'Others' ? 'selected' : '' ?>>Others</option>
+
+  </select>
+</div>
+
+  <!-- Cause -->
+  <div class="col-md-3">
+    <label class="form-label fw-semibold required">Cause of Disability</label>
+
+    <div class="mb-2">
+      <label class="me-3">
+        <input type="radio" name="cause" value="3"
           onchange="updateOptions(this.value)"
-          <?= ($draftData['cause_detail'] ?? '') === 'Acquired' ? 'checked' : '' ?>>
-        <label class="form-check-label" for="causeAcquired">
-          Acquired
-        </label>
-      </div>
+          <?= ($draftData['cause'] ?? '') == '3' ? 'checked' : '' ?>>
+        Acquired
+      </label>
+
+      <label>
+        <input type="radio" name="cause" value="4"
+          onchange="updateOptions(this.value)"
+          <?= ($draftData['cause'] ?? '') == '4' ? 'checked' : '' ?>>
+        Congenital / Inborn
+      </label>
     </div>
 
-    <select
-      id="cause_description"
-      name="cause_description"
-      class="form-select"
-      required>
+    <select name="cause_description" id="cause_description" class="form-select" required>
       <option value="">Please Select</option>
     </select>
   </div>
 
-  <!-- House No. & Street -->
+
+
   <div class="col-md-3">
     <label class="form-label fw-semibold required">House No. and Street</label>
-    <input
-      type="text"
-      name="house_no_street"
-      id="house_no_street"
-      class="form-control"
-      required
-      value="<?= htmlspecialchars($draftData['house_no_street'] ?? '') ?>">
+    <input type="text" name="house_no_street" class="form-control"
+      value="<?= htmlspecialchars($draftData['house_no_street'] ?? '') ?>" required>
   </div>
 
-  <!-- Barangay -->
   <div class="col-md-3">
     <label class="form-label fw-semibold required">Barangay</label>
-    <input
-      type="text"
-      name="barangay"
-      id="barangay"
-      class="form-control"
-      required
-      value="<?= htmlspecialchars($draftData['barangay'] ?? '') ?>">
+    <input type="text" name="barangay" class="form-control"
+      value="<?= htmlspecialchars($draftData['barangay'] ?? '') ?>" required>
   </div>
 
-  <!-- Municipality (NOT REQUIRED) -->
   <div class="col-md-3">
     <label class="form-label fw-semibold">Municipality</label>
-    <input
-      type="text"
-      name="municipality"
-      id="municipality"
-      class="form-control"
+    <input type="text" name="municipality" class="form-control"
       value="<?= htmlspecialchars($draftData['municipality'] ?? '') ?>">
   </div>
 </div>
@@ -589,8 +610,6 @@ if ($_SESSION['max_step'] < $currentStep) {
           value="<?= htmlspecialchars($draftData['email_address'] ?? '') ?>">
       </div>
 
-
-
       <div class="text-end">
         <button type="submit" class="btn btn-primary px-4">Next</button>
       </div>
@@ -603,46 +622,42 @@ if ($_SESSION['max_step'] < $currentStep) {
   let navigating = false;
       </script>
 
-  <script>
-    const causeSelect = document.getElementById('cause_description');
+      <script>
+function updateOptions(causeId) {
+  const select = document.getElementById('cause_description');
 
-    function updateOptions(type) {
-      let options = [];
+  let options = [];
 
-        if (type === "Congenital/Inborn"){
-        options = ["Autism", "ADHD", "Cerebral Palsy", "Down Syndrome"];
-      } else if (type === "Acquired") {
-        options = ["Chronic Illness", "Cerebral Palsy", "Injury"];
-      }
+  if (causeId == 3) {
+    // Acquired
+    options = [
+      "Injury",
+      "Chronic Illness"
+    ];
+  } else if (causeId == 4) {
+    // Congenital
+    options = [
+      "Autism",
+      "ADHD",
+      "Cerebral Palsy",
+      "Down Syndrome"
+    ];
+  }
 
-      causeSelect.innerHTML = '<option value="">Please Select</option>';
-      options.forEach(opt => {
-        const optionElement = document.createElement('option');
-        optionElement.textContent = opt;
-        optionElement.value = opt;
-        causeSelect.appendChild(optionElement);
-      });
-    }
+  select.innerHTML = '<option value="">Please Select</option>';
 
-    window.addEventListener('DOMContentLoaded', () => {
-      const savedCause = "<?= $draftData['cause'] ?? '' ?>";
-      const savedDesc = "<?= $draftData['cause_description'] ?? '' ?>";
+  options.forEach(item => {
+    const option = document.createElement('option');
+    option.value = item;
+    option.textContent = item;
+    select.appendChild(option);
+  });
 
-      if (savedCause) {
-        const radio = document.querySelector(`input[name="cause"][value="${savedCause}"]`);
-        if (radio) {
-          radio.checked = true;
-          updateOptions(savedCause); // This repopulates dropdown
-        }
-      
-        if (savedDesc) {
-          setTimeout(() => {
-            causeSelect.value = savedDesc;
-          }, 100);
-        }
-      }
-    });
-  </script>
+  // restore selected value (important for reload)
+  const saved = "<?= $draftData['cause_description'] ?? '' ?>";
+  if (saved) select.value = saved;
+}
+</script>
 
   <script>
   window.currentStep = <?= (int)$currentStep ?>;
@@ -673,7 +688,7 @@ document.querySelectorAll('.step').forEach(step => {
     document.addEventListener('DOMContentLoaded', () => {
       console.log('Autosave script loaded');
 
-      const form = document.getElementById('appForm'); // make sure <form> has id="appForm"
+      <form id="appForm" method="POST" action="form1.php?type=<?= htmlspecialchars($type) ?>" enctype="multipart/form-data">
       if (!form) {
         console.error('Autosave: form not found');
         return;
@@ -759,10 +774,11 @@ form.addEventListener('change', debounce(() => {
 
 .required::after {
     content: " *";
-    color: #dc3545; /* Bootstrap red */
+    color: #dc3545;
     font-weight: bold;
+}
 
-    .photo-box {
+.photo-box {
   position: relative;
 }
 
@@ -780,11 +796,17 @@ form.addEventListener('change', debounce(() => {
   background-color: #f8fbff;
 }
 
-  }
+    }
 </style>
 
-
-
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    let selected = document.querySelector('input[name="cause"]:checked');
+    if (selected) {
+        updateOptions(selected.value);
+    }
+});
+</script>
 
 </body>
 </html>

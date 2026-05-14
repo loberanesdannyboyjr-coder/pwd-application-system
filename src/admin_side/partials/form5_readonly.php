@@ -49,7 +49,11 @@ $occupationChoices = [
 
 $applicationType = gp(['application_type','type'],'N/A');
 $pwdNumber = gp(['pwd_number','pwd_no'],'To be filled by PDAO');
-$applicationDate = gp(['application_date','created_at'],'');
+$applicationDate = gp(['application_date'], '');
+
+if (!empty($applicationDate)) {
+    $applicationDate = date('Y-m-d', strtotime($applicationDate));
+}
 
 /* ---------- helper to produce a web URL for a stored path if needed ---------- */
 function make_web_url($stored) {
@@ -271,7 +275,144 @@ $appId = isset($app_id) ? $app_id : (isset($_GET['id']) ? $_GET['id'] : ''); // 
 
   <!-- family / accomplished by -->
 
-  <div class="mb-3 border-start border-4 border-primary bg-light rounded p-2 ps-3 fw-semibold text-primary">IN CASE OF EMERGENCY</div>
+<!-- ================= FAMILY BACKGROUND ================= -->
+
+<h5 class="mt-4">Family Background</h5>
+
+<div class="row g-3 mb-2">
+
+  <div class="col-md-2">
+    <label class="form-label">Father's Name:</label>
+  </div>
+
+  <div class="col-md-3">
+    <input class="form-control bg-light"
+           value="<?= _e(gp(['father_last_name'])) ?>"
+           readonly>
+  </div>
+
+  <div class="col-md-3">
+    <input class="form-control bg-light"
+           value="<?= _e(gp(['father_first_name'])) ?>"
+           readonly>
+  </div>
+
+  <div class="col-md-3">
+    <input class="form-control bg-light"
+           value="<?= _e(gp(['father_middle_name'])) ?>"
+           readonly>
+  </div>
+
+</div>
+
+
+<div class="row g-3 mb-2">
+
+  <div class="col-md-2">
+    <label class="form-label">Mother's Name:</label>
+  </div>
+
+  <div class="col-md-3">
+    <input class="form-control bg-light"
+           value="<?= _e(gp(['mother_last_name'])) ?>"
+           readonly>
+  </div>
+
+  <div class="col-md-3">
+    <input class="form-control bg-light"
+           value="<?= _e(gp(['mother_first_name'])) ?>"
+           readonly>
+  </div>
+
+  <div class="col-md-3">
+    <input class="form-control bg-light"
+           value="<?= _e(gp(['mother_middle_name'])) ?>"
+           readonly>
+  </div>
+
+</div>
+
+
+<div class="row g-3 mb-3">
+
+  <div class="col-md-2">
+    <label class="form-label">Guardian's Name:</label>
+  </div>
+
+  <div class="col-md-3">
+    <input class="form-control bg-light"
+           value="<?= _e(gp(['guardian_last_name'])) ?>"
+           readonly>
+  </div>
+
+  <div class="col-md-3">
+    <input class="form-control bg-light"
+           value="<?= _e(gp(['guardian_first_name'])) ?>"
+           readonly>
+  </div>
+
+  <div class="col-md-3">
+    <input class="form-control bg-light"
+           value="<?= _e(gp(['guardian_middle_name'])) ?>"
+           readonly>
+  </div>
+
+</div>
+
+<!-- ================= ACCOMPLISHED BY ================= -->
+
+<h5 class="mt-3">Accomplished By</h5>
+
+<div class="row mb-2">
+
+  <div class="col-md-3">
+
+    <?php $acc = strtolower(gp(['accomplished_by','accomplishedby'],'')); ?>
+
+    <div class="form-check">
+      <input class="form-check-input" type="radio" disabled <?= ($acc === 'applicant') ? 'checked' : '' ?>>
+      <label class="form-check-label">Applicant</label>
+    </div>
+
+    <div class="form-check">
+      <input class="form-check-input" type="radio" disabled <?= ($acc === 'guardian') ? 'checked' : '' ?>>
+      <label class="form-check-label">Guardian</label>
+    </div>
+
+    <div class="form-check">
+      <input class="form-check-input" type="radio" disabled <?= ($acc === 'representative') ? 'checked' : '' ?>>
+      <label class="form-check-label">Representative</label>
+    </div>
+
+  </div>
+
+  <div class="col-md-3">
+    <label class="form-label">Last Name</label>
+    <input class="form-control bg-light"
+           value="<?= _e(gp(['guardian_last_name','representative_last_name'],'')) ?>"
+           readonly>
+  </div>
+
+  <div class="col-md-3">
+    <label class="form-label">First Name</label>
+    <input class="form-control bg-light"
+           value="<?= _e(gp(['guardian_first_name','representative_first_name'],'')) ?>"
+           readonly>
+  </div>
+
+  <div class="col-md-3">
+    <label class="form-label">Middle Name</label>
+    <input class="form-control bg-light"
+           value="<?= _e(gp(['guardian_middle_name','representative_middle_name'],'')) ?>"
+           readonly>
+  </div>
+
+</div>
+</section>
+
+<div class="section-title">
+    IN CASE OF EMERGENCY
+</div>
 
   <div class="row g-3 mb-4">
     <div class="col-md-6"><label class="form-label">Contact Person’s Name:</label><div class="form-control bg-light"><?= _e(gp(['contact_person_name','contact_person','contactperson'],'') ) ?></div></div>
@@ -279,8 +420,9 @@ $appId = isset($app_id) ? $app_id : (isset($_GET['id']) ? $_GET['id'] : ''); // 
   </div>
 
   <!-- FILES -->
-  <div class="mb-3 border-start border-4 border-primary bg-light rounded p-2 ps-3 fw-semibold text-primary">FILES</div>
-
+<div class="section-title">
+    FILES
+</div>
   <?php if (!empty($draftData['files']) && is_array($draftData['files'])): ?>
     <ul class="files-list list-unstyled mb-4">
       <?php foreach ($draftData['files'] as $f):
@@ -304,12 +446,7 @@ $appId = isset($app_id) ? $app_id : (isset($_GET['id']) ? $_GET['id'] : ''); // 
           <div class="actions ms-auto">
             <a href="<?= _e($viewUrl) ?>" target="<?= _e($target) ?>" class="small">View</a>
             <a href="<?= _e($dlUrl) ?>" class="small ms-2">Download</a>
-            <?php
-              // Also show direct external link if server file is not available and an external url exists
-              if (empty($f['server_found']) && !empty($f['url']) && (parse_url($f['url'], PHP_URL_SCHEME) === 'http' || parse_url($f['url'], PHP_URL_SCHEME) === 'https')) {
-                  echo ' <a href="' . _e($f['url']) . '" target="_blank" class="small ms-2 text-muted">Open external</a>';
-              }
-            ?>
+
           </div>
         </li>
       <?php endforeach; ?>
@@ -326,4 +463,19 @@ $appId = isset($app_id) ? $app_id : (isset($_GET['id']) ? $_GET['id'] : ''); // 
   .files-list li{ padding:.45rem .65rem; border-bottom:1px solid #eef0f3; display:flex; gap:1rem; align-items:flex-start; }
   .files-list .actions a{ color:#0d6efd; text-decoration:none; }
   .files-list .actions a:hover{ text-decoration:underline; }
+  .section-title {
+    font-weight: 700;
+    font-size: 0.9rem;
+    color: #2563eb;
+    text-transform: uppercase;
+
+    background: #f1f5f9;
+    border-left: 4px solid #2563eb;
+
+    padding: 10px 14px;
+    border-radius: 6px;
+
+    margin-top: 24px;
+    margin-bottom: 14px;
+}
 </style>

@@ -44,24 +44,24 @@ $conds = [];
    BASE QUERY (CHO INBOX)
    =============================== */
 $sql = "
-SELECT DISTINCT ON (h.application_id)
+SELECT
     a.application_id,
     a.applicant_id,
     a.application_type,
     a.application_date,
-    h.to_status AS status,
-    h.created_at AS forwarded_at,
+    a.workflow_status AS status,
+    a.updated_at AS forwarded_at,
     COALESCE(d.data->>'barangay', ap.barangay) AS barangay,
     COALESCE(d.data->>'first_name', ap.first_name) AS first_name,
     COALESCE(d.data->>'middle_name', ap.middle_name) AS middle_name,
     COALESCE(d.data->>'last_name', ap.last_name) AS last_name
-FROM application_status_history h
-JOIN application a ON a.application_id = h.application_id
+FROM application a
 JOIN applicant ap ON ap.applicant_id = a.applicant_id
 LEFT JOIN application_draft d
     ON d.application_id = a.application_id AND d.step = 1
-WHERE h.to_status = 'For CHO Verification'
+WHERE a.workflow_status = 'cho_review'
 ";
+
 
 /* ===============================
    SEARCH FILTER
@@ -94,13 +94,15 @@ if ($conds) {
    COUNT QUERY (for pagination)
    =============================== */
 $countSql = "
-SELECT COUNT(DISTINCT h.application_id)
-FROM application_status_history h
-JOIN application a ON a.application_id = h.application_id
+SELECT COUNT(*)
+FROM application a
+JOIN applicant ap ON ap.applicant_id = a.applicant_id
 LEFT JOIN application_draft d
     ON d.application_id = a.application_id AND d.step = 1
-WHERE h.to_status = 'For CHO Verification'
+WHERE a.workflow_status = 'cho_review'
 ";
+
+
 
 if ($conds) {
     $countSql .= ' AND ' . implode(' AND ', $conds);
@@ -117,7 +119,7 @@ $totalPages = max(1, ceil($total / $limit));
    FINAL ORDERING (FIXED)
    =============================== */
 $sql .= "
-ORDER BY h.application_id, h.created_at DESC
+ORDER BY a.updated_at DESC, a.application_id DESC
 LIMIT {$limit} OFFSET {$offset}
 ";
 
@@ -137,17 +139,17 @@ while ($res && $r = pg_fetch_assoc($res)) {
 /* ===============================
    BARANGAY DROPDOWN
    =============================== */
-$barangays = [];
 $bq = "
 SELECT DISTINCT COALESCE(d.data->>'barangay', ap.barangay) AS barangay
-FROM application_status_history h
-JOIN application a ON a.application_id = h.application_id
+FROM application a
 JOIN applicant ap ON ap.applicant_id = a.applicant_id
 LEFT JOIN application_draft d
     ON d.application_id = a.application_id AND d.step = 1
-WHERE h.to_status = 'For CHO Verification'
+WHERE a.workflow_status = 'cho_review'
 ORDER BY barangay
 ";
+
+$barangays = [];
 
 $br = pg_query($conn, $bq);
 while ($br && $b = pg_fetch_assoc($br)) {
@@ -158,27 +160,41 @@ while ($br && $b = pg_fetch_assoc($br)) {
    STATUS BADGE (CHO)
    =============================== */
 function getStatusBadge($status) {
-    switch ($status) {
-        case 'For CHO Verification':
-            return ['bg' => '#6f42c1', 'text' => 'FOR CHO REVIEW'];
 
-        case 'CHO Verified':
-            return ['bg' => '#14b8a6', 'text' => 'MEDICALLY ACCEPTED'];
+    switch (strtolower($status)) {
 
-        case 'Approved':
-            return ['bg' => '#22c55e', 'text' => 'OFFICIAL PWD'];
+        case 'cho_review':
+            return [
+                'class' => 'bg-primary',
+                'text'  => 'FOR CHO REVIEW'
+            ];
 
-        case 'CHO Rejected':
-        case 'Denied':
-            return ['bg' => '#ef4444', 'text' => 'REJECTED'];
+        case 'cho_approved':
+            return [
+                'class' => 'bg-info text-dark',
+                'text'  => 'MEDICALLY ACCEPTED'
+            ];
+
+        case 'pdao_approved':
+            return [
+                'class' => 'bg-success',
+                'text'  => 'OFFICIAL PWD'
+            ];
+
+        case 'rejected':
+            return [
+                'class' => 'bg-danger',
+                'text'  => 'DISAPPROVED'
+            ];
 
         default:
-            return ['bg' => '#9ca3af', 'text' => strtoupper($status)];
+            return [
+                'class' => 'bg-secondary',
+                'text'  => strtoupper($status)
+            ];
     }
 }
 ?>
-
-
 
     <!DOCTYPE html>
     <html lang="en">
@@ -193,122 +209,101 @@ function getStatusBadge($status) {
         <link rel="stylesheet" href="../../assets/css/global/component.css">
     </head>
     <body>
-        <!-- Sidebar -->
-        <div class="sidebar">
-            <div class="logo">
-                <img src="../../assets/pictures/white.png" alt="logo" width="45">
-                <img src="../../assets/pictures/CHO logo.png" alt="logo 2" width="45">
-                <h4>CHO</h4>
-            </div>
-            <hr>
 
-            <a href="CHO_dashboard.php"><i class="fas fa-chart-line me-2"></i><span>Dashboard</span></a>
-            <a href="members.php"><i class="fas fa-wheelchair me-2"></i><span>Members</span></a>
-            <a href="applications.php" class="active"><i class="fas fa-users me-2"></i><span>Applications</span></a>
+<div class="layout">
 
-            <div class="sidebar-item">
-                <div class="toggle-btn d-flex justify-content-between align-items-center">
-                    <span class="no-wrap d-flex align-items-center">
-                        <i class="fas fa-folder me-2"></i><span>Manage Applications</span>
-                    </span>
-                    <i class="fas fa-chevron-down chevron-icon"></i>
-                </div>
-                <div class="submenu">
-                    <a href="accepted.php" class="submenu-link d-flex align-items-center ps-4" style="padding-top: 3px; padding-bottom: 3px; margin: 5px 0;">
-                        <span class="icon" style="width: 18px;"><i class="fas fa-user-check"></i></span>
-                        <span class="ms-2">Accepted</span>
-                    </a>
-                    <a href="pending.php" class="submenu-link d-flex align-items-center ps-4" style="padding-top: 3px; padding-bottom: 3px; margin: 5px 0;">
-                        <span class="icon" style="width: 18px;"><i class="fas fa-hourglass-half"></i></span>
-                        <span class="ms-2">Pending</span>
-                    </a>
-                    <a href="denied.php" class="submenu-link d-flex align-items-center ps-4" style="padding-top: 3px; padding-bottom: 3px; margin: 5px 0;">
-                        <span class="icon" style="width: 18px;"><i class="fas fa-user-times"></i></span>
-                        <span class="ms-2">Denied</span>
-                    </a>
-                </div>
-            </div>
+<?php include __DIR__ . '/../../includes/cho_sidebar.php'; ?>
 
-            <a href="logout.php"><i class="fas fa-sign-out-alt me-2"></i><span>Logout</span></a>
+<div class="main-content">
+
+<div class="container-fluid">
+    <!-- CARD -->
+    <div class="card shadow-sm border-0" style="border-radius:12px;">
+        <div class="card-body p-4">
+
+        <?php if (isset($_GET['saved'])): ?>
+        <div class="alert alert-success alert-dismissible fade show mb-3" role="alert">
+            <i class="fas fa-check-circle me-2"></i>
+            Medical assessment saved successfully.
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
         </div>
+        <?php endif; ?>
 
-        <div class="main">
-            <div class="topbar d-flex justify-content-between align-items-center">
-                <div class="d-flex align-items-center">
-                    <div class="toggle-btn" onclick="toggleSidebar()">
-                        <i class="fas fa-bars"></i>
-                    </div>
-                </div>
+            <!-- SEARCH ROW -->
+            <form method="get" class="d-flex gap-2 align-items-center mb-3">
+                <input type="text"
+                       name="q"
+                       value="<?= h($search) ?>"
+                       class="form-control"
+                       placeholder="Search applicant name..."
+                       style="max-width:320px;">
 
-                <div class="d-flex flex-column align-items-end">
-                    <div class="d-flex align-items-center ms-3 mt-2 mb-2" style="font-size: 1.4rem;">
-                        <strong><?= h($username) ?></strong>
-                        <i class="fas fa-user-circle ms-3 me-2 mb-2 mt-2" style="font-size: 2.5rem;"></i>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Search row with Barangay filter -->
-            <form method="get" class="d-flex align-items-center mt-3 gap-2 flex-wrap">
-                <label class="me-1">Search:</label>
-                <input type="text" name="q" placeholder="Search applicants..." value="<?= h($search) ?>" class="form-control" style="width: 220px;">
-                <select name="barangay" class="form-select" style="width: 160px;">
-                    <option value="">Barangay</option>
+                <select name="barangay"
+                        class="form-select"
+                        style="max-width:150px;">
+                    <option value="">All</option>
                     <?php foreach ($barangays as $b): ?>
-                        <option value="<?= h($b) ?>" <?= $b === $barangayFilter ? 'selected' : '' ?>><?= h($b) ?></option>
+                        <option value="<?= h($b) ?>"
+                            <?= $b === $barangayFilter ? 'selected' : '' ?>>
+                            <?= h($b) ?>
+                        </option>
                     <?php endforeach; ?>
                 </select>
-                <button type="submit" class="btn btn-primary"><i class="fas fa-search"></i></button>
-                <?php if ($search !== '' || $barangayFilter !== ''): ?>
-                    <a href="applications.php" class="btn btn-outline-secondary"><i class="fas fa-times"></i> Clear</a>
-                <?php endif; ?>
+
+                <button class="btn btn-primary px-4">Filter</button>
             </form>
 
-            <?php if ($dbErr): ?>
-                <div class="alert alert-danger mt-3">Database error: <?= h($dbErr) ?></div>
-            <?php endif; ?>
-
-            <div class="section-header">
-                <div>LIST OF APPLICANTS (<?= $total ?> total)</div>
-                <div class="d-flex justify-content-between" style="width: 265px;">
-                    <div class="fw-bold">Status</div>
-                    <div class="fw-bold me-4"></div>
-                </div>
+            <!-- TOTAL -->
+            <div class="mb-3">
+                <strong>Total results:</strong> <?= number_format($total) ?>
             </div>
 
-            <?php if (empty($rows)): ?>
-                <div class="p-4 bg-white rounded">
-                    <p class="text-muted mb-0">No applications found.</p>
-                </div>
-            <?php else: ?>
-    <?php foreach ($rows as $r):
-        $fullname = trim(($r['first_name'] ?? '') . ' ' . ($r['middle_name'] ?? '') . ' ' . ($r['last_name'] ?? ''));
-        $barangay = $r['barangay'] ?: 'N/A';
-        $viewUrl = 'view_applicant.php?id=' . urlencode($r['application_id']);
-        $badge = getStatusBadge($r['status'] ?? '');
-    ?>
-    <div class="member-list">
-        <div class="member-info">
-            <div>
-                <div><b><?= h($fullname ?: 'Unknown') ?></b></div>
-                <div style="font-size: 12px;"><?= h($barangay) ?>, Iligan City</div>
+            <!-- TABLE -->
+            <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                    <thead style="background:#4b5563; color:#fff;">
+                        <tr>
+                            <th>Applicant Name</th>
+                            <th>Application Type</th>
+                            <th>Date Submitted</th>
+                            <th style="width:180px;">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($rows as $r):
+                        $fullname = trim(
+                            ($r['last_name'] ?? '') . ', ' .
+                            ($r['first_name'] ?? '') . ' ' .
+                            ($r['middle_name'] ?? '')
+                        );
+
+                        $dateFmt = $r['application_date']
+                            ? date('M d, Y', strtotime($r['application_date']))
+                            : '';
+
+                        $viewUrl = 'view_applicant.php?id=' . urlencode($r['application_id']);
+                    ?>
+                        <tr style="border-top:1px solid #e5e7eb;">
+                            <td><?= h($fullname ?: 'Unknown') ?></td>
+                            <td><?= h(ucfirst($r['application_type'] ?? '')) ?></td>
+                            <td><?= h($dateFmt) ?></td>
+                            <td>
+                                <a href="<?= h($viewUrl) ?>"
+                                   style="color:#374151; font-weight:500; text-decoration:none;">
+                                    <i class="fas fa-eye me-1"></i> View Application
+                                </a>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
             </div>
-        </div>
 
-        <div class="d-flex align-items-center">
-            <span class="badge text-white text-center"
-                  style="font-size:0.85rem; min-width:110px; padding:0.5rem 0.75rem; background-color:<?= $badge['bg'] ?>; white-space:nowrap;">
-                <?= $badge['text'] ?>
-            </span>
-
-            <a href="<?= h($viewUrl) ?>" class="view-link text-primary text-decoration-none">
-                <i class="fas fa-eye me-1 ms-5"></i> View Applicant
-            </a>
         </div>
     </div>
-<?php endforeach; ?>
-<?php endif; ?>
 
+</div>
+</div>
 
             <!-- Pagination -->
             <?php if ($totalPages > 1): ?>
@@ -336,30 +331,133 @@ function getStatusBadge($status) {
             <?php endif; ?>
         </div>
 
+        </div> 
+</div> 
+
         <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-        <script>
-            document.querySelectorAll('.sidebar-item .toggle-btn').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    const submenu = btn.nextElementSibling;
-                    const icon = btn.querySelector('.chevron-icon');
-                    if (submenu) {
-                        submenu.style.maxHeight = submenu.style.maxHeight ? null : submenu.scrollHeight + "px";
-                    }
-                    if (icon) icon.classList.toggle('rotate');
+
+        <script src="../../assets/js/sidebar.js">
+            const sidebar = document.getElementById("sidebar");
+
+            sidebar.addEventListener("mouseenter", () => {
+
+                sidebar.classList.remove("w-16");
+                sidebar.classList.add("w-64");
+
+                document.body.classList.add("sidebar-expanded");
+
+                document.querySelectorAll(".sidebar-text").forEach(el=>{
+                    el.classList.remove("hidden");
                 });
+
             });
 
-            function toggleSidebar() {
-                const sidebar = document.querySelector('.sidebar');
-                const main = document.querySelector('.main');
-                sidebar.classList.toggle('closed');
-                main.classList.toggle('shifted');
-            }
-        </script>
+            sidebar.addEventListener("mouseleave", () => {
 
+                sidebar.classList.remove("w-64");
+                sidebar.classList.add("w-16");
+
+                document.body.classList.remove("sidebar-expanded");
+
+                document.querySelectorAll(".sidebar-text").forEach(el=>{
+                    el.classList.add("hidden");
+                });
+
+            });
+
+        </script>
         <style>
+
+           /* Default (expanded sidebar) */
+.main-content{
+    flex:1;
+    min-height:100vh;
+    background:#f5f7fb;
+    padding:20px;
+
+    margin-left:64px; /* collapsed sidebar */
+    transition: margin-left .3s ease;
+}
+
+body.sidebar-expanded .main-content{
+    margin-left:256px; /* expanded sidebar */
+}
             .rotate { transform: rotate(180deg); transition: transform 0.3s ease; }
             .pagination { display: flex; gap: 5px; margin-top: 20px; justify-content: center; }
-        </style>
-    </body>
-    </html>
+            
+            .section-header {
+            background-color: #4b5563;
+            color: #ffffff;
+            padding: 10px 16px;
+            border-radius: 6px;
+            font-weight: 600;
+                    }
+
+                .table {
+                    border-radius: 8px;
+                    overflow: hidden;
+                }
+                .table thead tr.table-header {
+                    background-color: #4b5563 !important;
+                }
+
+                .table thead tr.table-header th {
+                    background-color: #4b5563 !important;
+                    color: #ffffff !important;
+                    font-weight: 600;
+                    padding: 14px;
+                    border: none;
+                }
+
+            .table-header th {
+                font-weight: 600;
+                padding: 16px;
+                border: none;
+            }
+
+                        .card.table-card {
+                border-radius: 10px;
+                box-shadow: 0 8px 18px rgba(0,0,0,0.06);
+                border: none;
+            }
+
+            .table thead th {
+                background: #4b5563;
+                color: #fff;
+                border: 0;
+                padding: 14px;
+                font-weight: 400;
+            }
+
+            .table tbody td {
+                padding: 10px;
+                border-top: 1px solid #e5e7eb;
+            }
+
+            .table-hover tbody tr:hover {
+                background-color: #f9fafb;
+            }
+
+            .view-link {
+                color: #374151;
+                font-weight: 500;
+                text-decoration: none;
+                display: inline-flex;       /* keeps icon + text aligned */
+                align-items: center;
+                gap: 6px;
+                white-space: nowrap;        /* 🚀 PREVENTS WRAPPING */
+            }
+
+            .view-link:hover {
+                color: #111827;
+                text-decoration: none;
+            }
+
+            .badge {
+                min-width: 110px;
+            }
+                    </style>
+
+                    
+                </body>
+                </html>

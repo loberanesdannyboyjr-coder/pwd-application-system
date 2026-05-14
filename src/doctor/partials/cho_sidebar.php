@@ -1,71 +1,143 @@
 <?php
-// src/doctor/partials/cho_sidebar.php
+$firstName  = $_SESSION['first_name'] ?? '';
+$lastName   = $_SESSION['last_name'] ?? '';
+$username   = $_SESSION['username'] ?? 'User';
 
-// Safe function
-function _h($s){ return htmlspecialchars((string)$s, ENT_QUOTES | ENT_SUBSTITUTE); }
-
-// Ensure constants exist (avoid fatal errors)
-$base = defined('APP_BASE_URL') ? rtrim(APP_BASE_URL, '/') : '';
-$adminBase = defined('ADMIN_BASE') ? rtrim(ADMIN_BASE, '/') : '';
-
-// Current script
-$current = basename($_SERVER['SCRIPT_NAME'] ?? '');
-
-// Active function
-function is_active($names) {
-    if (!is_array($names)) $names = [$names];
-    $cur = basename($_SERVER['SCRIPT_NAME'] ?? '');
-    return in_array($cur, $names) ? 'active' : '';
+$clientName = trim($firstName . ' ' . $lastName);
+if ($clientName === '') {
+    $clientName = $username;
 }
 ?>
 
-<div class="sidebar">
-  <div class="logo">
-    <img src="<?= _h($base) ?>/assets/pictures/white.png" alt="logo" width="45">
-    <img src="<?= _h($base) ?>/assets/pictures/CHO logo.png" alt="logo 2" width="45">
-    <h4>CHO</h4>
-  </div>
-  <hr>
+<aside id="sidebar"
+class="fixed top-0 left-0 h-screen
+w-64
+bg-gradient-to-b from-blue-800 to-blue-900
+text-white shadow-lg
+transition-all duration-300
+z-40 overflow-hidden">
 
-  <a class="<?= is_active(['CHO_dashboard.php','dashboard.php']) ?>">
-    <i class="fas fa-chart-line me-2"></i><span>Dashboard</span>
-  </a>
+<!-- HEADER -->
+<div class="flex items-center gap-3 px-4 py-3 border-b border-blue-700">
 
-  <a href="<?= _h($adminBase) ?>/members.php" class="<?= is_active('members.php') ?>">
-    <i class="fas fa-wheelchair me-2"></i><span>Members</span>
-  </a>
+<img src="/assets/pictures/pdao_logo.png"
+class="w-9 h-9 object-contain shrink-0">
 
-  <a href="<?= _h($adminBase) ?>/applications.php" class="<?= is_active('applications.php') ?>">
-    <i class="fas fa-users me-2"></i><span>Applications</span>
-  </a>
+<div class="leading-tight">
 
-  <div class="sidebar-item">
-    <div class="toggle-btn d-flex justify-content-between align-items-center">
-      <span class="no-wrap d-flex align-items-center">
-        <i class="fas fa-folder me-2"></i><span>Manage Applications</span>
-      </span>
-      <i class="fas fa-chevron-down chevron-icon"></i>
-    </div>
+<p class="text-sm font-semibold">
+<?= htmlspecialchars($clientName) ?>
+</p>
 
-    <div class="submenu">
-      <a href="<?= _h($base) ?>/src/doctor/accepted.php"
-         class="submenu-link ps-4 <?= is_active('accepted.php') ?>">
-         <i class="fas fa-user-check" style="width:18px;"></i><span class="ms-2">Accepted</span>
-      </a>
+<p class="text-xs text-blue-200">
+CHO
+</p>
 
-      <a href="<?= _h($base) ?>/src/doctor/pending.php"
-         class="submenu-link ps-4 <?= is_active('pending.php') ?>">
-         <i class="fas fa-hourglass-half" style="width:18px;"></i><span class="ms-2">Pending</span>
-      </a>
-
-      <a href="<?= _h($base) ?>/src/doctor/denied.php"
-         class="submenu-link ps-4 <?= is_active('denied.php') ?>">
-         <i class="fas fa-user-times" style="width:18px;"></i><span class="ms-2">Denied</span>
-      </a>
-    </div>
-  </div>
-
-  <a href="<?= _h($base) ?>/src/doctor/logout.php">
-    <i class="fas fa-sign-out-alt me-2"></i><span>Logout</span>
-  </a>
 </div>
+
+</div>
+
+
+<!-- NAVIGATION -->
+<nav class="mt-6 space-y-1 text-[15px]">
+
+<!-- Dashboard -->
+<a href="CHO_dashboard.php"
+class="flex items-center gap-4 px-4 py-3 hover:bg-blue-700 transition">
+
+<i class="fas fa-chart-line text-lg"></i>
+<span>Dashboard</span>
+
+</a>
+
+
+<!-- Members -->
+<a href="members.php"
+class="flex items-center gap-4 px-4 py-3 hover:bg-blue-700 transition">
+
+<i class="fas fa-wheelchair text-lg"></i>
+<span>Members</span>
+
+</a>
+
+
+<!-- Applications -->
+<a href="applications.php"
+class="flex items-center gap-4 px-4 py-3 hover:bg-blue-700 transition">
+
+<i class="fas fa-users text-lg"></i>
+<span>Applications</span>
+
+</a>
+
+
+<!-- Manage Applications -->
+<div>
+
+<button onclick="toggleSubmenu()"
+class="flex items-center justify-between w-full px-4 py-3 hover:bg-blue-700 transition">
+
+<div class="flex items-center gap-4">
+
+<i class="fas fa-folder text-lg"></i>
+<span>Manage Applications</span>
+
+</div>
+
+<i id="submenuIcon" class="fas fa-chevron-down text-sm transition-transform"></i>
+
+</button>
+
+
+<div id="submenu" class="hidden space-y-1">
+
+<a href="accepted.php"
+class="flex items-center gap-4 px-8 py-3 hover:bg-blue-700 transition">
+
+<i class="fas fa-user-check text-lg"></i>
+<span>Accepted</span>
+
+</a>
+
+
+<a href="denied.php"
+class="flex items-center gap-4 px-8 py-3 hover:bg-blue-700 transition">
+
+<i class="fas fa-user-times text-lg"></i>
+<span>Denied</span>
+
+</a>
+
+</div>
+
+</div>
+
+
+<!-- Logout -->
+<a href="logout.php"
+class="flex items-center gap-4 px-4 py-3 text-red-200 hover:bg-red-600 hover:text-white transition">
+
+<i class="fas fa-sign-out-alt text-lg"></i>
+<span>Logout</span>
+
+</a>
+
+</nav>
+
+</aside>
+
+
+<script>
+
+function toggleSubmenu(){
+
+const submenu = document.getElementById("submenu");
+const icon = document.getElementById("submenuIcon");
+
+submenu.classList.toggle("hidden");
+
+icon.classList.toggle("rotate-180");
+
+}
+
+</script>

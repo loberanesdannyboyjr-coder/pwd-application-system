@@ -7,7 +7,6 @@ require_once '../../config/db.php';
 require_once '../../includes/DraftHelper.php';
 
 
-
 $application_id = (int) $_SESSION['application_id'];
 $form1 = loadDraftData(1, $application_id);
 $form2 = loadDraftData(2, $application_id);
@@ -15,6 +14,11 @@ $form3 = loadDraftData(3, $application_id);
 $form4 = loadDraftData(4, $application_id);
 
 $draftData = array_merge($form1, $form2, $form3, $form4);
+
+if (!empty($draftData['pic_1x1_path'])) {
+    $draftData['bodypic_path'] = $draftData['pic_1x1_path'];
+}
+
 
 /* ===============================
    LOAD documentrequirements
@@ -34,11 +38,16 @@ if ($res && pg_num_rows($res) > 0) {
     $docRow = pg_fetch_assoc($res);
 }
 
-/* ✅ merge ONCE */
-$draftData = array_merge($draftData, $docRow);
 
-/* ✅ explicit mapping (optional but safe) */
-$draftData['pic_1x1_path'] = $docRow['pic_1x1_path'] ?? null;
+$draftData = array_merge($draftData, array_filter($docRow));
+
+
+if (!empty($docRow['pic_1x1_path'])) {
+    $draftData['pic_1x1_path'] = $docRow['pic_1x1_path'];
+} 
+
+$workflowStatus = strtolower($draftData['workflow_status'] ?? '');
+$isSubmitted = ($workflowStatus === 'submitted');
 
 
 $currentStep = 5;
@@ -432,14 +441,6 @@ $maxStep = $_SESSION['max_step'] ?? 5;
   </div>
 </div>
 
-<!-- CSS for read-only radios -->
-<style>
-  .readonly-radio {
-    pointer-events: none;
-    opacity: 1; /* keeps checked radios blue */
-  }
-</style>
-
 <!-- Family Background (Read-Only) -->
 <div class="mt-4">
   <div class="row mb-1 align-items-end">
@@ -573,13 +574,7 @@ $maxStep = $_SESSION['max_step'] ?? 5;
 
 
 <!-- Keep radios visually active but non-clickable -->
-<style>
-  .readonly-radio {
-    pointer-events: none; /* disable click */
-    opacity: 1;           /* keep visible */
-    accent-color: #0d6efd; /* force Bootstrap blue */
-  }
-</style>
+
 <div class="mt-4">
   <div class="row g-3 mb-3">
     <div class="col-md-6">
@@ -616,12 +611,6 @@ $maxStep = $_SESSION['max_step'] ?? 5;
 </div>
 
 <!-- Keep radios visually active -->
-<style>
-  .readonly-radio {
-    pointer-events: none;
-    opacity: 1; /* Keep blue shading for checked items */
-  }
-</style>
 
 
         <div class="mb-3 border-start border-4 border-primary bg-light rounded p-2 ps-3 fw-semibold text-primary">
@@ -727,7 +716,7 @@ $viewTarget = function(string $p) {
       <div class="d-flex justify-content-between mt-4">
         <a href="form4.php" class="btn btn-outline-primary">Back</a>
 
-        <?php if (($draftData['workflow_status'] ?? '') === 'submitted'): ?>
+        <?php if ($isSubmitted): ?>
           <button class="btn btn-success" disabled>
             ✔ Already Submitted
           </button>
@@ -757,34 +746,33 @@ $viewTarget = function(string $p) {
     </script>
 
 
-      <script>
-document.getElementById('submitBtn').addEventListener('click', async function () {
+ <script>
+document.getElementById('submitBtn')?.addEventListener('click', async function () {
 
   const btn = this;
   btn.disabled = true;
   btn.innerText = 'Submitting...';
 
   try {
-   const response = await fetch('/api/submit_application.php', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    application_id: <?= (int) $application_id ?>
-  })
-});
+    const response = await fetch('../../api/submit_application.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        application_id: <?= (int) $application_id ?>
+      })
+    });
 
     const data = await response.json();
 
     if (!response.ok || !data.success) {
       throw new Error(data.error || 'Submission failed');
     }
-    alert('✅ Your application has been submitted successfully.');
 
-    // ✅ redirect to client home
-    window.location.href = 'http://localhost:8080/public/index.php';
+    // ✅ Redirect to confirmation page (NOT homepage)
+    window.location.href = 'submission_success.php';
 
   } catch (err) {
-    console.error(err); // ✅ debugging
+    console.error(err);
     alert('❌ ' + err.message);
 
     btn.disabled = false;

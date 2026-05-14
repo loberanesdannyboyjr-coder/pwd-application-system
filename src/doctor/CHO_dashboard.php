@@ -1,10 +1,13 @@
 <?php
 /** CHO Dashboard - displays statistics and charts based on workflow status */
+
 session_start();
 require_once __DIR__ . '/../../config/db.php';
 require_once __DIR__ . '/../../config/paths.php';
 
-// Auth check
+/* ===============================
+   AUTH CHECK
+================================ */
 if (!isset($_SESSION['username']) || !in_array($_SESSION['role'] ?? '', ['doctor','CHO','ADMIN'])) {
     header('Location: ' . APP_BASE_URL . '/backend/auth/login.php');
     exit;
@@ -12,328 +15,348 @@ if (!isset($_SESSION['username']) || !in_array($_SESSION['role'] ?? '', ['doctor
 
 $username = $_SESSION['username'] ?? 'User';
 
-function h($s) {
+function h($s){
     return htmlspecialchars((string)$s, ENT_QUOTES | ENT_SUBSTITUTE);
 }
 
 /* ===============================
    DASHBOARD STATISTICS
-   =============================== */
+================================ */
 
 $stats = [
-    'pwds'    => 0,
-    'new'     => 0,
-    'renew'   => 0,
-    'lost_id' => 0
+    'pwds' => 0,
+    'new' => 0,
+    'renew' => 0,
+    'lost' => 0
 ];
 
-// Official PWD members (FINAL APPROVAL + PWD NUMBER)
-$pwdRes = pg_query($conn, "
-    SELECT COUNT(*)
+/* Official PWD members (UNIQUE APPLICANTS ONLY) */
+$pwdRes = pg_query($conn,"
+    SELECT COUNT(DISTINCT a.applicant_id)
     FROM application a
     JOIN applicant ap ON ap.applicant_id = a.applicant_id
-    WHERE a.workflow_status = 'approved_final'
-      AND ap.pwd_number IS NOT NULL
+    WHERE a.workflow_status = 'pdao_approved'
+    AND ap.pwd_number IS NOT NULL
+    AND ap.pwd_number <> ''
 ");
-if ($pwdRes) {
-    $stats['pwds'] = (int) pg_fetch_result($pwdRes, 0, 0);
+
+if($pwdRes){
+    $stats['pwds'] = (int) pg_fetch_result($pwdRes,0,0);
 }
 
-// Workflow filter visible to CHO
-$workflowStatuses = ['cho_review','cho_accepted','approved_final'];
-$workflowFilter = "('" . implode("','", $workflowStatuses) . "')";
+/* Workflow filter */
+$workflowStatuses = ['cho_approved','pdao_approved'];
+$workflowFilter = "('" . implode("','",$workflowStatuses) . "')";
 
-// New applications (CHO side only)
-$newRes = pg_query($conn, "
+/* New */
+$newRes = pg_query($conn,"
     SELECT COUNT(*)
     FROM application
-    WHERE LOWER(application_type::text) = 'new'
-      AND workflow_status IN $workflowFilter
+    WHERE LOWER(application_type::text)='new'
+    AND workflow_status IN $workflowFilter
 ");
-if ($newRes) {
-    $stats['new'] = (int) pg_fetch_result($newRes, 0, 0);
+if($newRes){
+    $stats['new'] = (int) pg_fetch_result($newRes,0,0);
 }
 
-// Renewal applications
-$renewRes = pg_query($conn, "
+/* Renewal */
+$renewRes = pg_query($conn,"
     SELECT COUNT(*)
     FROM application
-    WHERE LOWER(application_type::text) = 'renewal'
-      AND workflow_status IN $workflowFilter
+    WHERE LOWER(application_type::text)='renew'
+    AND workflow_status IN $workflowFilter
 ");
-if ($renewRes) {
-    $stats['renew'] = (int) pg_fetch_result($renewRes, 0, 0);
+if($renewRes){
+    $stats['renew'] = (int) pg_fetch_result($renewRes,0,0);
 }
 
-// Lost ID applications
-$lostRes = pg_query($conn, "
+/* Lost ID */
+$lostRes = pg_query($conn,"
     SELECT COUNT(*)
     FROM application
-    WHERE LOWER(application_type::text) = 'lost id'
-      AND workflow_status IN $workflowFilter
+    WHERE LOWER(application_type::text)='lost'
+    AND workflow_status IN $workflowFilter
 ");
-if ($lostRes) {
-    $stats['lost_id'] = (int) pg_fetch_result($lostRes, 0, 0);
+if($lostRes){
+    $stats['lost'] = (int) pg_fetch_result($lostRes,0,0);
 }
 
 /* ===============================
-   CHART DATA (LAST 12 MONTHS)
-   =============================== */
+   CHART DATA
+================================ */
 
 $chartData = [
-    'new'     => array_fill(0, 12, 0),
-    'renew'   => array_fill(0, 12, 0),
-    'lost_id' => array_fill(0, 12, 0)
+    'new' => array_fill(0,12,0),
+    'renew' => array_fill(0,12,0),
+    'lost' => array_fill(0,12,0)
 ];
+
 $monthLabels = [];
 
-for ($i = 11; $i >= 0; $i--) {
+for($i=11;$i>=0;$i--){
+
     $date = new DateTime();
     $date->modify("-$i months");
 
     $monthLabels[] = $date->format('M Y');
+
     $monthStart = $date->format('Y-m-01');
-    $monthEnd   = $date->format('Y-m-t');
+    $monthEnd = $date->format('Y-m-t');
 
-    $idx = 11 - $i;
+    $idx = 11-$i;
 
-    // NEW
-    $res = pg_query($conn, "
+    $res = pg_query($conn,"
+    SELECT COUNT(*)
+    FROM application
+    WHERE LOWER(application_type::text)='new'
+    AND workflow_status IN $workflowFilter
+    AND application_date BETWEEN '$monthStart' AND '$monthEnd'
+");
+
+    if($res) $chartData['new'][$idx]=(int)pg_fetch_result($res,0,0);
+
+    $res = pg_query($conn,"
         SELECT COUNT(*)
         FROM application
-        WHERE LOWER(application_type::text) = 'new'
-          AND workflow_status IN $workflowFilter
-          AND application_date BETWEEN '$monthStart' AND '$monthEnd'
+        WHERE LOWER(application_type::text)='renew'
+        AND workflow_status IN $workflowFilter
+        AND application_date BETWEEN '$monthStart' AND '$monthEnd'
     ");
-    if ($res) $chartData['new'][$idx] = (int) pg_fetch_result($res, 0, 0);
+    if($res) $chartData['renew'][$idx]=(int)pg_fetch_result($res,0,0);
 
-    // RENEW
-    $res = pg_query($conn, "
+    $res = pg_query($conn,"
         SELECT COUNT(*)
         FROM application
-        WHERE LOWER(application_type::text) = 'renewal'
-          AND workflow_status IN $workflowFilter
-          AND application_date BETWEEN '$monthStart' AND '$monthEnd'
+        WHERE LOWER(application_type::text)='lost'
+        AND workflow_status IN $workflowFilter
+        AND application_date BETWEEN '$monthStart' AND '$monthEnd'
     ");
-    if ($res) $chartData['renew'][$idx] = (int) pg_fetch_result($res, 0, 0);
-
-    // LOST ID
-    $res = pg_query($conn, "
-        SELECT COUNT(*)
-        FROM application
-        WHERE LOWER(application_type::text) = 'lost id'
-          AND workflow_status IN $workflowFilter
-          AND application_date BETWEEN '$monthStart' AND '$monthEnd'
-    ");
-    if ($res) $chartData['lost_id'][$idx] = (int) pg_fetch_result($res, 0, 0);
+    if($res) $chartData['lost'][$idx]=(int)pg_fetch_result($res,0,0);
 }
 ?>
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
+
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
 <title>CHO Dashboard</title>
 
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 
 <link rel="stylesheet" href="../../assets/css/global/base.css">
 <link rel="stylesheet" href="../../assets/css/global/layout.css">
 <link rel="stylesheet" href="../../assets/css/global/component.css">
+
 </head>
 
 <body>
 
-<!-- Sidebar -->
-<div class="sidebar">
-    <div class="logo">
-        <img src="../../assets/pictures/white.png" width="45">
-        <img src="../../assets/pictures/CHO logo.png" width="45">
-        <h4>CHO</h4>
-    </div>
-    <hr>
+<div class="layout">
 
-    <a href="CHO_dashboard.php" class="active">
-        <i class="fas fa-chart-line me-2"></i>Dashboard
-    </a>
+<?php include __DIR__.'/../../includes/cho_sidebar.php'; ?>
 
-    <a href="members.php">
-        <i class="fas fa-wheelchair me-2"></i>Members
-    </a>
-
-    <a href="applications.php">
-        <i class="fas fa-users me-2"></i>Applications
-    </a>
-
-    <div class="sidebar-item">
-        <div class="toggle-btn d-flex justify-content-between align-items-center">
-            <span><i class="fas fa-folder me-2"></i>Manage Applications</span>
-            <i class="fas fa-chevron-down chevron-icon"></i>
-        </div>
-        <div class="submenu">
-            <a href="accepted.php"><i class="fas fa-user-check me-2"></i>Accepted</a>
-            <a href="pending.php"><i class="fas fa-hourglass-half me-2"></i>Pending</a>
-            <a href="denied.php"><i class="fas fa-user-times me-2"></i>Denied</a>
-        </div>
-    </div>
-
-    <a href="logout.php">
-        <i class="fas fa-sign-out-alt me-2"></i>Logout
-    </a>
-</div>
-
-<div class="main">
-
-<div class="topbar d-flex justify-content-between align-items-center">
-    <div class="toggle-btn" onclick="toggleSidebar()">
-        <i class="fas fa-bars"></i>
-    </div>
-    <div class="d-flex align-items-center">
-        <strong><?= h($username) ?></strong>
-        <i class="fas fa-user-circle ms-3" style="font-size:2.5rem"></i>
-    </div>
-</div>
+<div class="main-content">
 
 <div class="cards">
-    <div class="card-stat"><small>PWDs</small><h3><?= $stats['pwds'] ?></h3></div>
-    <div class="card-stat"><small>NEW</small><h3><?= $stats['new'] ?></h3></div>
-    <div class="card-stat"><small>RENEW</small><h3><?= $stats['renew'] ?></h3></div>
-    <div class="card-stat"><small>LOST ID</small><h3><?= $stats['lost_id'] ?></h3></div>
+
+<div class="card-stat">
+<small>PWDs</small>
+<h3><?= $stats['pwds'] ?></h3>
+</div>
+
+<div class="card-stat">
+<small>NEW</small>
+<h3><?= $stats['new'] ?></h3>
+</div>
+
+<div class="card-stat">
+<small>RENEW</small>
+<h3><?= $stats['renew'] ?></h3>
+</div>
+
+<div class="card-stat">
+<small>LOST ID</small>
+<h3><?= $stats['lost'] ?></h3>
+</div>
 </div>
 
 <div class="chart-container">
-    <canvas id="statsChart"></canvas>
+<canvas id="statsChart"></canvas>
+</div>
 </div>
 
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script>
-    const ctx = document.getElementById('statsChart');
-    ctx.height = 460;
 
-    new Chart(ctx, {
-      type: 'line',
-      data: {
-        labels: <?= json_encode($monthLabels) ?>,
-        datasets: [
-          {
-            label: 'New Applications',
-            data: <?= json_encode($chartData['new']) ?>,
-            backgroundColor: 'rgba(66, 135, 245, 0.3)',
-            borderColor: '#4287f5',
-            borderWidth: 2,
-            pointBackgroundColor: '#4287f5',
-            pointBorderColor: '#ffffff',
-            pointBorderWidth: 2,
-            pointRadius: 5,
-            fill: true,
-            lineTension: 0.3
-          },
-          {
-            label: 'Renew Applications',
-            data: <?= json_encode($chartData['renew']) ?>,
-            backgroundColor: 'rgba(102, 51, 255, 0.3)',
-            borderColor: '#6633ff',
-            borderWidth: 2,
-            pointBackgroundColor: '#6633ff',
-            pointBorderColor: '#ffffff',
-            pointBorderWidth: 2,
-            pointRadius: 5,
-            fill: true,
-            lineTension: 0.3
-          },
-          {
-            label: 'Lost ID Applications',
-            data: <?= json_encode($chartData['lost_id']) ?>,
-            backgroundColor: 'rgba(255, 99, 132, 0.3)',
-            borderColor: '#FF6384',
-            borderWidth: 2,
-            pointBackgroundColor: '#FF6384',
-            pointBorderColor: '#ffffff',
-            pointBorderWidth: 2,
-            pointRadius: 5,
-            fill: true,
-            lineTension: 0.3
-          }
-        ]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        scales: {
-          y: {
-            beginAtZero: true,
-            grid: {
-              color: '#ddd',
-            },
-            ticks: {
-              font: {
-                size: 12,
-              }
-            }
-          },
-          x: {
-            grid: {
-              color: '#ddd',
-            },
-            ticks: {
-              font: {
-                size: 12,
-              }
-            }
-          }
-        },
-        plugins: {
-          legend: {
-            labels: {
-              font: {
-                size: 14,
-              },
-              color: '#333'
-            }
-          },
-          tooltip: {
-            backgroundColor: '#444',
-            titleColor: '#fff',
-            bodyColor: '#fff'
-          }
-        }
-      }
-    });
-  </script>
+<script>
+
+const ctx = document.getElementById('statsChart').getContext('2d');
+new Chart(ctx,{
+type:'line',
+
+data:{
+labels:<?= json_encode($monthLabels) ?>,
+datasets:[
+{
+label:'New Applications',
+data:<?= json_encode($chartData['new']) ?>,
+backgroundColor:'rgba(66,135,245,0.3)',
+borderColor:'#4287f5',
+borderWidth:2,
+pointRadius:4,
+fill:true,
+tension:0.3
+},
+{
+label:'Renew Applications',
+data:<?= json_encode($chartData['renew']) ?>,
+backgroundColor:'rgba(102,51,255,0.3)',
+borderColor:'#6633ff',
+borderWidth:2,
+pointRadius:4,
+fill:true,
+tension:0.3
+},
+{
+label:'Lost ID Applications',
+data:<?= json_encode($chartData['lost']) ?>,
+backgroundColor:'rgba(255,99,132,0.3)',
+borderColor:'#FF6384',
+borderWidth:2,
+pointRadius:4,
+fill:true,
+tension:0.3
+}
+]
+},
+
+options:{
+responsive:true,
+maintainAspectRatio:false,
+scales:{
+y:{
+beginAtZero:true,
+suggestedMax:5,
+ticks:{
+stepSize:1,
+precision:0
+}
+}
+}
+}
+
+});
+
+</script>
+<script src="../../assets/js/sidebar.js"></script>
+
+<style>
+body{
+    overflow-x:hidden;
+}
+
+/* MAIN CONTENT */
+/* NORMAL SIDEBAR */
+.main-content{
+    flex:1;
+    min-height:100vh;
+    background:#f5f7fb;
+    padding:20px 15px;
+
+    margin-left:64px; /* sidebar collapsed width */
+    transition: margin-left .3s;
+}
+
+/* WHEN SIDEBAR COLLAPSES */
+body.sidebar-collapsed .main-content{
+    margin-left:80px;
+    width:calc(100% - 80px);
+}
+
+body.sidebar-expanded .main-content{
+    margin-left:256px; /* sidebar expanded */
+}
+/* CARDS */
+.cards{
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(240px,1fr));
+    gap:20px;
+    margin-bottom:20px;
+}
+
+.card-stat{
+    background:#3533b4;
+    color:white;
+    padding:18px 22px;
+    border-radius:8px;
+
+    display:flex;             
+    justify-content:space-between;
+    align-items:center;
+
+    box-shadow:0 4px 10px rgba(0,0,0,0.15);
+}
+
+.card-stat small{
+    font-size:14px;
+    opacity:0.9;
+}
+
+.card-stat h3{
+    font-size:24px;
+    margin:0;
+}
+
+/* CHART */
+.chart-container{
+    background:white;
+    padding:20px;
+    border-radius:8px;
+    box-shadow:0 4px 12px rgba(0,0,0,0.08);
+    width:100%;
+    height:450px;
+    margin-top:10px;
+}
+
+.chart-container canvas{
+    width:100% !important;
+    height:100% !important;
+}
+
+.layout{
+    display:flex;
+    min-height:100vh;
+}
+
+/* RESPONSIVE */
+@media (max-width:1100px){
+
+.main-content{
+    margin-left:80px;
+    width:calc(100vw - 80px);
+}
 
 
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+}
 
-  <script>
-    document.querySelectorAll('.sidebar-item .toggle-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const submenu = btn.nextElementSibling;
-        const icon = btn.querySelector('.chevron-icon');
-        if (submenu) {
-          submenu.style.maxHeight = submenu.style.maxHeight ? null : submenu.scrollHeight + "px";
-        }
-        if (icon) icon.classList.toggle('rotate');
-      });
-    });
+@media (max-width:600px){
 
-    function toggleSidebar() {
-      const sidebar = document.querySelector('.sidebar');
-      const main = document.querySelector('.main');
-      sidebar.classList.toggle('closed');
-      main.classList.toggle('shifted');
-    }
-  </script>
 
-  <style>
-    .rotate {
-      transform: rotate(180deg);
-      transition: transform 0.3s ease;
-    }
-  </style>
+.main-content{
+    margin-left:0;
+    width:100vw;
+    padding:20px;
+}
+
+}
+
+</style>
+
 
 </body>
-
 </html>

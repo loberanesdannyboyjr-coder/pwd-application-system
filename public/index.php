@@ -1,11 +1,6 @@
 <?php
 session_start();
-
-if (!isset($_SESSION['user_id'])) {
-    header("Location: /public/login_form.php");
-    exit;
-}
-
+$isLoggedIn = isset($_SESSION['applicant_id']);
 ?>
 
 
@@ -22,6 +17,10 @@ if (!isset($_SESSION['user_id'])) {
   <!-- ✅ Import Poppins Font from Google Fonts -->
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+
 
 
   <!-- ✅ Custom Styles -->
@@ -48,81 +47,84 @@ if (!isset($_SESSION['user_id'])) {
   </style>
 </head>
 
-<body class="bg-white flex flex-col min-h-screen text-gray-800">
+<body
+  id="pageBody"
+  class="bg-white flex flex-col min-h-screen text-gray-800
+         <?= $isLoggedIn ? 'pl-16' : '' ?> transition-all duration-300">
 
-<!-- Header Section -->
-<header class="relative bg-gradient-to-r from-blue-700 to-blue-900 text-white py-6 px-4">
 
-  <!-- Main Header Content -->
-  <div class="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6 mt-4 md:mt-0">
-    
-<!-- Welcome Section -->
-<div class="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6 mt-4 md:mt-0">
-
-<!-- Logos -->
-<div class="flex items-center gap-4">
-  <img src="../assets/pictures/pdao_logo.png" alt="PWD Logo" class="w-32 h-32 object-contain" />
-  <img src="../assets/pictures/iligan_logo.png" alt="Iligan Logo" class="w-32 h-32 object-contain" />
-</div>
-
-  <!-- Welcome Text and Action Buttons -->
-  
-<?php if (isset($_SESSION['first_name'])): ?>
-  <a href="/public/logout.php" 
-     class="absolute top-4 right-6 text-sm text-white-200 underline hover:text-red-400 z-50">
-     Logout
-  </a>
+<?php if ($isLoggedIn): ?>
+  <?php include __DIR__ . '/../src/client/sidebar.php'; ?>
 <?php endif; ?>
-      <div>
-        <h1 class="text-2xl md:text-3xl font-bold">
-          <?php
-            if (isset($_SESSION['first_name'])) {
-              echo "Welcome to PWD Online Application, " . htmlspecialchars($_SESSION['first_name']) . "!";
-            } else {
-              echo "Welcome to PWD Online Application!";
-            }
-          ?>
+
+<header class="relative bg-gradient-to-r from-blue-700 to-blue-900 text-white py-6">
+
+  <!-- Burger button (top-left) -->
+  <?php if ($isLoggedIn): ?>
+    <button
+      onclick="toggleSidebar()"
+      class="absolute top-4 left-6 text-white text-2xl z-50">
+      <i class="fas fa-bars"></i>
+    </button>
+  <?php endif; ?>
+
+
+  <!-- CENTERED CONTAINER (IMPORTANT PART) -->
+  <div class="max-w-7xl mx-auto px-6">
+
+    <!-- SAME LAYOUT: logos LEFT, text RIGHT -->
+    <div class="flex items-center gap-6 justify-center">
+
+      <!-- Logos (NOT centered individually) -->
+      <div class="flex items-center gap-4 shrink-0">
+        <img src="../assets/pictures/pdao_logo.png"
+             class="w-28 h-28 object-contain" alt="PDAO Logo">
+        <img src="../assets/pictures/iligan_logo.png"
+             class="w-28 h-28 object-contain" alt="Iligan Logo">
+      </div>
+
+      <!-- Text -->
+      <div class="max-w-xl">
+        <h1 class="text-2xl md:text-2xl font-bold">
+          <?= isset($_SESSION['first_name'])
+            ? 'Welcome to PWD Online Application, ' . htmlspecialchars($_SESSION['first_name']) . '!'
+            : 'Welcome to PWD Online Application!' ?>
         </h1>
-        <p class="text-sm md:text-base mt-1">
-          Iligan City's official platform for empowering Persons with Disabilities through fast and inclusive ID processing.
+        <p class="text-sm md:text-base mt-1 text-blue-100">
+          Iligan City's official platform for empowering Persons with Disabilities.
         </p>
       </div>
+
     </div>
   </div>
 </header>
-
       
 <!-- Buttons Section -->
-<section class="bg-white py-7 px-5 text-center mt-20">
+<section class="bg-white py-7 px-5 text-center mt-0">
   <div class="max-w-7xl mx-auto">
     <!-- Flex container with no wrapping to keep buttons on one line -->
     <div class="flex justify-center gap-5 mb-6">
 
       <!-- New Registration -->
-     <a href="<?php echo isset($_SESSION['user_id']) ? '../src/client/form1.php?type=new' : '/public/login_form.php'; ?>"
+     <a href="<?php echo $isLoggedIn ? '../src/client/form1.php?type=new' : '/public/login_form.php'; ?>"
         class="bg-blue-800 text-white font-semibold px-8 py-6 rounded-lg shadow-md hover:bg-blue-800 transition w-56 sm:w-64 flex flex-col items-center">
         <img src="../assets/pictures/newreg.png" alt="New Registration" class="w-16 h-16 mb-3" />
         <span class="text-lg font-semibold">New Registration</span>
       </a>
 
      <!-- Renew ID -->
-      <a href="<?php echo isset($_SESSION['user_id']) ? '/src/client/form1.php?type=renew' : '/public/login_form.php'; ?>"
+      <a href="<?php echo $isLoggedIn ? '/src/client/renew.php' : '/public/login_form.php'; ?>"
         class="bg-blue-800 text-white font-semibold px-8 py-6 rounded-lg shadow-md hover:bg-blue-800 transition w-56 sm:w-64 flex flex-col items-center">
         <img src="../assets/pictures/renewreg.png" alt="Renew ID" class="w-16 h-16 mb-3" />
         <span class="text-lg font-semibold">Renew ID</span>
       </a>
 
       <!-- Lost ID -->
-      <a href="<?php echo isset($_SESSION['user_id']) ? '/src/client/form1.php?type=lost' : '/public/login_form.php'; ?>"
+      <a href="<?php echo $isLoggedIn
+ ? '/src/client/form1.php?type=lost' : '/public/login_form.php'; ?>"
         class="bg-blue-800 text-white font-semibold px-8 py-6 rounded-lg shadow-md hover:bg-blue-800 transition w-56 sm:w-64 flex flex-col items-center">
         <img src="../assets/pictures/lostid.png" alt="Lost ID" class="w-16 h-16 mb-3" />
         <span class="text-lg font-semibold">Lost ID</span>
-      </a>
-
-      <!-- Check Status -->
-      <a href="check_status.php" class="bg-blue-800 text-white font-semibold px-8 py-6 rounded-lg shadow-md hover:bg-blue-800 transition w-56 sm:w-64 flex flex-col items-center">
-        <img src="../assets/pictures/checkstatus.png" alt="Check Status" class="w-16 h-16 mb-3" />
-        <span class="text-lg font-semibold">Check Status</span>
       </a>
 
     </div>
@@ -131,9 +133,11 @@ if (!isset($_SESSION['user_id'])) {
 <div class="flex flex-col items-center gap-4 mt-10">
   
   <!-- Requirements Button -->
-  <a href="#requirements" class="mt-20 bg-blue-800 text-white text-lg font-semibold px-12 py-2 rounded shadow hover:bg-blue-900 transition mb-40">
-    Requirements
-  </a>
+<a href="#requirements"
+   class="bg-blue-800 text-white text-sm font-semibold px-9 py-2.5 rounded-lg shadow hover:bg-blue-900 transition">
+  Requirements
+</a>
+
   
 </div>
 
@@ -150,8 +154,6 @@ if (!isset($_SESSION['user_id'])) {
       Get Started
     </a>
   </section>
-
-
 
 <!-- Qualifications Section (Adjusted size and margin) -->
 <section id="qualifications" class="py-20 px-4 bg-white text-center mt-16">
@@ -180,7 +182,6 @@ if (!isset($_SESSION['user_id'])) {
       <p><img src="../assets/pictures/check.png" alt="Check" class="w-4 h-4 inline-block" /> 1 whole body picture</p>
       <p><img src="../assets/pictures/check.png" alt="Check" class="w-4 h-4 inline-block" /> Barangay Certificate of Residency / Indigency</p>
       <p><img src="../assets/pictures/check.png" alt="Check" class="w-4 h-4 inline-block" /> Doctor's Referral / Medical Certificate</p>
-      <p><img src="../assets/pictures/check.png" alt="Check" class="w-4 h-4 inline-block" /> Certificate from City Health Office</p>
       <p><img src="../assets/pictures/check.png" alt="Check" class="w-4 h-4 inline-block" /> 1 pc 1x1 ID picture</p>
 
     </div>
@@ -191,12 +192,11 @@ if (!isset($_SESSION['user_id'])) {
         <img src="../assets/pictures/renew_icon.png" alt="Renew" class="w-6 h-6" />
         <h4 class="text-blue-700 font-semibold text-lg mb-3">ID Renewal</h4>
       </div>
-      <p><img src="../assets/pictures/check.png" alt="Check" class="w-4 h-4 inline-block" /> Filled-out registration form</p>
-      <p><img src="../assets/pictures/check.png" alt="Check" class="w-4 h-4 inline-block" /> Surrender old PWD ID</p>
-      <p><img src="../assets/pictures/check.png" alt="Check" class="w-4 h-4 inline-block" /> Barangay Certificate of Residency / Indigency</p>
-      <p><img src="../assets/pictures/check.png" alt="Check" class="w-4 h-4 inline-block" /> Doctor's Referral / Medical Certificate</p>
-      <p><img src="../assets/pictures/check.png" alt="Check" class="w-4 h-4 inline-block" /> Certificate from City Health Office</p>
-      <p><img src="../assets/pictures/check.png" alt="Check" class="w-4 h-4 inline-block" /> 1pc 1x1 ID picture</p>
+      <p><img src="../assets/pictures/check.png" alt="Check" class="w-4 h-4 inline-block" /> Update form</p>
+      <p><img src="../assets/pictures/check.png" alt="Check" class="w-4 h-4 inline-block" /> Upload old PWD ID</p>
+      <p><img src="../assets/pictures/check.png" alt="Check" class="w-4 h-4 inline-block" /> Updated Barangay Certificate of Residency / Indigency</p>
+      <p><img src="../assets/pictures/check.png" alt="Check" class="w-4 h-4 inline-block" /> UpdatedDoctor's Referral / Medical Certificate</p>
+      <p><img src="../assets/pictures/check.png" alt="Check" class="w-4 h-4 inline-block" /> Updated 1x1 ID picture</p>
     </div>
 
     <!-- Lost ID -->
@@ -205,18 +205,24 @@ if (!isset($_SESSION['user_id'])) {
         <img src="../assets/pictures/lostid_icon.png" alt="Lost" class="w-6 h-6" />
         <h4 class="text-blue-700 font-semibold text-lg mb-3">Lost ID</h4>
       </div>
-      <p><img src="../assets/pictures/check.png" alt="Check" class="w-4 h-4 inline-block" /> Filled-out registration form</p>
+      <p><img src="../assets/pictures/check.png" alt="Check" class="w-4 h-4 inline-block" /> Update form</p>
       <p><img src="../assets/pictures/check.png" alt="Check" class="w-4 h-4 inline-block" /> Affidavit of Loss</p>
-      <p><img src="../assets/pictures/check.png" alt="Check" class="w-4 h-4 inline-block" /> Barangay Certificate of Residency / Indigency</p>
-      <p><img src="../assets/pictures/check.png" alt="Check" class="w-4 h-4 inline-block" /> Doctor's Referral / Medical Certificate</p>
-      <p><img src="../assets/pictures/check.png" alt="Check" class="w-4 h-4 inline-block" /> Certificate from City Health Office</p>
-      <p><img src="../assets/pictures/check.png" alt="Check" class="w-4 h-4 inline-block" /> 1pc 1x1 ID picture</p>
     </div>
 
-<!-- Footer (No changes needed, but adjusted the padding) -->
-<footer class="fixed bottom-0 left-0 w-full bg-gradient-to-tr from-blue-600 to-blue-950 text-white text-center py-7 px-4 shadow-inner">
-  <p class="text-sm font-semibold">© 2025 PWD Online ID Application. All Rights Reserved.</p>
-  <p class="text-xs mt-1 italic text-gray-100">Designed with care and inclusivity.</p>
+<footer
+  class="fixed bottom-0 left-0 w-full
+         bg-gradient-to-b from-blue-800 to-blue-900
+         text-white text-center
+         py-5 px-4
+         shadow-inner z-30">
+
+  <p class="text-sm font-semibold">
+    © 2025 PWD Online ID Application. All Rights Reserved.
+  </p>
+  <p class="text-xs mt-1 text-blue-100 italic">
+    Designed with care and inclusivity.
+  </p>
+
 </footer>
 
   <!-- ✅ JavaScript to detect when the Empowering Section is in view -->
@@ -237,6 +243,38 @@ if (!isset($_SESSION['user_id'])) {
         observer.observe(empoweringSection);
       });
     </script>
+
+<script>
+function toggleSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  const body = document.getElementById('pageBody');
+
+  const isExpanded = sidebar.classList.contains('w-64');
+
+  if (isExpanded) {
+    // Collapse
+    sidebar.classList.remove('w-64');
+    sidebar.classList.add('w-16');
+    body.classList.remove('pl-64');
+    body.classList.add('pl-16');
+
+    document.querySelectorAll('.sidebar-text').forEach(el => {
+      el.classList.add('hidden');
+    });
+  } else {
+    // Expand
+    sidebar.classList.remove('w-16');
+    sidebar.classList.add('w-64');
+    body.classList.remove('pl-16');
+    body.classList.add('pl-64');
+
+    document.querySelectorAll('.sidebar-text').forEach(el => {
+      el.classList.remove('hidden');
+    });
+  }
+}
+</script>
+
 
 </body>
 </html>

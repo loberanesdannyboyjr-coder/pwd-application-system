@@ -18,12 +18,13 @@ services:
       retries: 5
 
   php:
-    image: php:8.2-apache
+    build: .
     container_name: pdao_php
     ports:
       - "8080:80"
     volumes:
       - .:/var/www/html/PWD-Application-System
+      - ./php/uploads.ini:/usr/local/etc/php/conf.d/uploads.ini 
     working_dir: /var/www/html/PWD-Application-System
     environment:
       DB_HOST: postgres
@@ -48,3 +49,5 @@ services:
 
 volumes:
   pdao_data:
+
+

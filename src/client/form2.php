@@ -3,7 +3,7 @@ session_start();
 require_once '../../config/db.php';
 require_once '../../includes/DraftHelper.php';
 
-// ✅ Check session
+//Check session
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['applicant_id']) || !isset($_SESSION['application_id'])) {
     header("Location: ../../public/login_form.php");
     exit;
@@ -12,23 +12,47 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['applicant_id']) || !isset(
 $applicant_id   = (int)$_SESSION['applicant_id'];
 $application_id = (int)$_SESSION['application_id'];
 
-// ✅ Resolve application type (url -> post -> session)
+// Resolve application type (url -> post -> session)
 $type = strtolower($_GET['type'] ?? $_POST['type'] ?? ($_SESSION['application_type'] ?? 'new'));
 if ($type === 'renewal') $type = 'renew';
 if (!in_array($type, ['new','renew','lost'], true)) $type = 'new';
 $_SESSION['application_type'] = $type;
 
-// ✅ Load draft data for Step 2
+//  Load draft data for Step 2
 $step = 2;
 $draftData = loadDraftData($step, $application_id);
+
+if ($type !== 'new') {
+
+    $res = pg_query_params(
+        $conn,
+        "SELECT ad.data
+         FROM application a
+         JOIN application_draft ad 
+           ON a.application_id = ad.application_id
+         WHERE a.applicant_id = $1
+           AND a.workflow_status = 'pdao_approved'
+           AND ad.step = 2
+         ORDER BY a.created_at DESC
+         LIMIT 1",
+        [$applicant_id]
+    );
+
+    if ($res && pg_num_rows($res) > 0) {
+        $row = pg_fetch_assoc($res);
+
+        $approvedData = json_decode($row['data'], true);
+
+        // IMPORTANT
+        $draftData = array_merge($approvedData, $draftData ?? []);
+    }
+}
 
 // 🔒 LOCK FORM IF ALREADY SUBMITTED
 if (($draftData['workflow_status'] ?? 'draft') !== 'draft') {
     http_response_code(403);
     exit('Application already submitted. Editing is disabled.');
 }
-
-
 
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
     saveDraftData($step, $_POST, $application_id);
@@ -64,7 +88,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
         'guardian_name' => $_POST['guardian_name'] ?? null,
     ];
 
-    // ✅ Redirect to step 3, keep ?type
+    // Redirect to step 3, keep ?type
     header("Location: form3.php?type=" . urlencode($type));
     exit;
 }
@@ -77,8 +101,31 @@ $_SESSION['max_step'] = $_SESSION['max_step'] ?? 1;
 if ($_SESSION['max_step'] < $currentStep) {
     $_SESSION['max_step'] = $currentStep;
 }
-?>
 
+$isLocked = ($type === 'renew' || $type === 'lost');
+
+// editable fields for renew/lost
+$editableFields = [
+    'employment_status',
+    'employment_category',
+    'type_of_employment',
+    'occupation',
+
+    'organization_affiliated',
+    'contact_person',
+    'office_address',
+    'tel_no',
+
+    'accomplished_by'
+];
+
+// helper
+function isEditable($field, $editableFields, $isLocked) {
+    if (!$isLocked) return true;
+    return in_array($field, $editableFields);
+}
+
+?>
 
 <!DOCTYPE html>
 <html lang="en">
@@ -132,21 +179,32 @@ if ($_SESSION['max_step'] < $currentStep) {
     <div class="row g-2 align-items-start">
       <div class="col-md-4 pe-md-2">
 
-      <!-- Educational Attainment -->
-      <div class="mb-2">
-        <label class="form-label fw-semibold required">Educational Attainment</label>
-        <select name="educational_attainment" class="form-select" required>
-          <option value="">Please Select</option>
-          <option value="None" <?= ($draftData['educational_attainment'] ?? '') === 'None' ? 'selected' : '' ?>>None</option>
-          <option value="Kindergarten" <?= ($draftData['educational_attainment'] ?? '') === 'Kindergarten' ? 'selected' : '' ?>>Kindergarten</option>
-          <option value="Elementary" <?= ($draftData['educational_attainment'] ?? '') === 'Elementary' ? 'selected' : '' ?>>Elementary</option>
-          <option value="Junior High School" <?= ($draftData['educational_attainment'] ?? '') === 'Junior High School' ? 'selected' : '' ?>>Junior High School</option>
-          <option value="Senior High School" <?= ($draftData['educational_attainment'] ?? '') === 'Senior High School' ? 'selected' : '' ?>>Senior High School</option>
-          <option value="College" <?= ($draftData['educational_attainment'] ?? '') === 'College' ? 'selected' : '' ?>>College</option>
-          <option value="Vocational" <?= ($draftData['educational_attainment'] ?? '') === 'Vocational' ? 'selected' : '' ?>>Vocational</option>
-          <option value="Post Graduate" <?= ($draftData['educational_attainment'] ?? '') === 'Post Graduate' ? 'selected' : '' ?>>Post Graduate</option>
-        </select>
-      </div>
+<!-- Educational Attainment -->
+<div class="mb-2">
+  <label class="form-label fw-semibold required">Educational Attainment</label>
+
+  <select name="educational_attainment" class="form-select" required
+    <?= $isLocked ? 'disabled' : '' ?>>
+
+    <option value="">Please Select</option>
+
+    <option value="None" <?= ($draftData['educational_attainment'] ?? '') === 'None' ? 'selected' : '' ?>>None</option>
+    <option value="Kindergarten" <?= ($draftData['educational_attainment'] ?? '') === 'Kindergarten' ? 'selected' : '' ?>>Kindergarten</option>
+    <option value="Elementary" <?= ($draftData['educational_attainment'] ?? '') === 'Elementary' ? 'selected' : '' ?>>Elementary</option>
+    <option value="Junior High School" <?= ($draftData['educational_attainment'] ?? '') === 'Junior High School' ? 'selected' : '' ?>>Junior High School</option>
+    <option value="Senior High School" <?= ($draftData['educational_attainment'] ?? '') === 'Senior High School' ? 'selected' : '' ?>>Senior High School</option>
+    <option value="College" <?= ($draftData['educational_attainment'] ?? '') === 'College' ? 'selected' : '' ?>>College</option>
+    <option value="Vocational" <?= ($draftData['educational_attainment'] ?? '') === 'Vocational' ? 'selected' : '' ?>>Vocational</option>
+    <option value="Post Graduate" <?= ($draftData['educational_attainment'] ?? '') === 'Post Graduate' ? 'selected' : '' ?>>Post Graduate</option>
+
+  </select>
+
+  <!-- Hidden fallback -->
+  <?php if ($isLocked): ?>
+  <input type="hidden" name="educational_attainment"
+    value="<?= htmlspecialchars($draftData['educational_attainment'] ?? '') ?>">
+  <?php endif; ?>
+</div>
 
 
         <!-- Status of Employment -->
@@ -205,7 +263,8 @@ if ($_SESSION['max_step'] < $currentStep) {
             <div class="form-check">
         <input class="form-check-input" type="radio" name="occupation" id="occ_managers"
               value="Managers"
-              <?= ($draftData['occupation'] ?? '') === 'Managers' ? 'checked' : '' ?>>
+              <?= ($draftData['occupation'] ?? '') === 'Managers' ? 'checked' : '' ?>
+              <?= $isLocked ? 'disabled' : '' ?>>
               <label class="form-check-label ms-1" for="occ_managers">Managers</label>
             </div>
 
@@ -291,8 +350,9 @@ if ($_SESSION['max_step'] < $currentStep) {
             <!-- Others -->
             <div class="form-check d-flex align-items-center mt-1">
               <input class="form-check-input me-2" type="radio" name="occupation" id="occ_others"
-                    value="Others"
-                    <?= ($draftData['occupation'] ?? '') === 'Others' ? 'checked' : '' ?>>
+                  value="Others"
+                  <?= ($draftData['occupation'] ?? '') === 'Others' ? 'checked' : '' ?>
+                  onchange="toggleOtherOccupation()">
               <label class="form-check-label me-2" for="occ_others">Others, specify:</label>
               <input type="text"
                     name="occupation_others"
@@ -307,27 +367,38 @@ if ($_SESSION['max_step'] < $currentStep) {
 
 
           <!-- Organization Info -->
-      <div class="row g-2 mt-3">
-        <label class="form-label fw-semibold text-primary mb-1" style="font-size: 1.2rem;">Organization Information:</label>
+      <div class="mt-3">
+        <label class="form-label fw-semibold text-primary" style="font-size: 1.2rem;">
+          Organization Information:
+        </label>
+      </div>
+
+      <div class="row g-2">
 
         <div class="col-md-3">
           <label class="form-label fw-semibold">Organization Affiliated</label>
-          <input class="form-control" name="organization_affiliated" value="<?= htmlspecialchars($draftData['organization_affiliated'] ?? '') ?>">
+          <input type="text" class="form-control" name="organization_affiliated" value="<?= htmlspecialchars($draftData['organization_affiliated'] ?? '') ?>">
         </div>
 
         <div class="col-md-3">
           <label class="form-label fw-semibold">Contact Person</label>
-          <input class="form-control" name="contact_person" value="<?= htmlspecialchars($draftData['contact_person'] ?? '') ?>">
+          <input type="text" class="form-control" name="contact_person"
+            value="<?= htmlspecialchars($draftData['contact_person'] ?? '') ?>"
+            <?= (!in_array('contact_person', $editableFields) && $isLocked) ? 'readonly' : '' ?>>
         </div>
 
         <div class="col-md-3">
           <label class="form-label fw-semibold">Office Address</label>
-          <input class="form-control" name="office_address" value="<?= htmlspecialchars($draftData['office_address'] ?? '') ?>">
+          <input class="form-control" name="office_address"
+          value="<?= htmlspecialchars($draftData['office_address'] ?? '') ?>"
+          <?= (!in_array('office_address', $editableFields) && $isLocked) ? 'readonly' : '' ?>>
         </div>
 
         <div class="col-md-3">
           <label class="form-label fw-semibold">Tel No.</label>
-          <input class="form-control" name="tel_no" value="<?= htmlspecialchars($draftData['tel_no'] ?? '') ?>">
+          <input class="form-control" name="tel_no"
+          value="<?= htmlspecialchars($draftData['tel_no'] ?? '') ?>"
+          <?= (!in_array('tel_no', $editableFields) && $isLocked) ? 'readonly' : '' ?>>
         </div>
       </div>
 
@@ -337,25 +408,29 @@ if ($_SESSION['max_step'] < $currentStep) {
       <div class="col-md-3">
         <label for="sss_no" class="form-label fw-semibold">SSS No.</label>
         <input type="text" name="sss_no" id="sss_no" class="form-control"
-          value="<?= htmlspecialchars($draftData['sss_no'] ?? '') ?>">
+          value="<?= htmlspecialchars($draftData['sss_no'] ?? '') ?>"
+          <?= (!in_array('sss_no', $editableFields) && $isLocked) ? 'readonly' : '' ?>>
       </div>
 
       <div class="col-md-3">
         <label for="gsis_no" class="form-label fw-semibold">GSIS No.</label>
         <input type="text" name="gsis_no" id="gsis_no" class="form-control"
-          value="<?= htmlspecialchars($draftData['gsis_no'] ?? '') ?>">
+          value="<?= htmlspecialchars($draftData['gsis_no'] ?? '') ?>"
+          <?= (!in_array('gsis_no', $editableFields) && $isLocked) ? 'readonly' : '' ?>>
       </div>
 
       <div class="col-md-3">
         <label for="pagibig_no" class="form-label fw-semibold">Pag-ibig No.</label>
         <input type="text" name="pagibig_no" id="pagibig_no" class="form-control"
-          value="<?= htmlspecialchars($draftData['pagibig_no'] ?? '') ?>">
+          value="<?= htmlspecialchars($draftData['pagibig_no'] ?? '') ?>"
+          <?= (!in_array('pagibig_no', $editableFields) && $isLocked) ? 'readonly' : '' ?>>
       </div>
 
       <div class="col-md-3">
         <label for="philhealth_no" class="form-label fw-semibold">PhilHealth No.</label>
         <input type="text" name="philhealth_no" id="philhealth_no" class="form-control"
-          value="<?= htmlspecialchars($draftData['philhealth_no'] ?? '') ?>">
+          value="<?= htmlspecialchars($draftData['philhealth_no'] ?? '') ?>"
+          <?= (!in_array('philhealth_no', $editableFields) && $isLocked) ? 'readonly' : '' ?>>
       </div>
     </div>
 
@@ -376,15 +451,18 @@ if ($_SESSION['max_step'] < $currentStep) {
         <div class="col-md-3"><label class="form-label" style="font-size: 0.95rem;">Father's Name:</label></div>
         <div class="col-md-3">
           <input type="text" name="father_last_name" id="father_last_name" class="form-control"
-            value="<?= htmlspecialchars($draftData['father_last_name'] ?? '') ?>">
+            value="<?= htmlspecialchars($draftData['father_last_name'] ?? '') ?>"
+            <?= (!in_array('father_last_name', $editableFields) && $isLocked) ? 'readonly' : '' ?>>
         </div>
         <div class="col-md-3">
           <input type="text" name="father_first_name" id="father_first_name" class="form-control"
-            value="<?= htmlspecialchars($draftData['father_first_name'] ?? '') ?>">
+            value="<?= htmlspecialchars($draftData['father_first_name'] ?? '') ?>"
+            <?= (!in_array('father_first_name', $editableFields) && $isLocked) ? 'readonly' : '' ?>>
         </div>
         <div class="col-md-3">
           <input type="text" name="father_middle_name" id="father_middle_name" class="form-control"
-            value="<?= htmlspecialchars($draftData['father_middle_name'] ?? '') ?>">
+            value="<?= htmlspecialchars($draftData['father_middle_name'] ?? '') ?>"
+            <?= (!in_array('father_middle_name', $editableFields) && $isLocked) ? 'readonly' : '' ?>>
         </div>
       </div>
 
@@ -393,15 +471,18 @@ if ($_SESSION['max_step'] < $currentStep) {
         <div class="col-md-3"><label class="form-label" style="font-size: 0.95rem;">Mother's Name:</label></div>
         <div class="col-md-3">
           <input type="text" name="mother_last_name" id="mother_last_name" class="form-control"
-            value="<?= htmlspecialchars($draftData['mother_last_name'] ?? '') ?>">
+            value="<?= htmlspecialchars($draftData['mother_last_name'] ?? '') ?>"
+            <?= (!in_array('mother_last_name', $editableFields) && $isLocked) ? 'readonly' : '' ?>>
         </div>
         <div class="col-md-3">
           <input type="text" name="mother_first_name" id="mother_first_name" class="form-control"
-            value="<?= htmlspecialchars($draftData['mother_first_name'] ?? '') ?>">
+            value="<?= htmlspecialchars($draftData['mother_first_name'] ?? '') ?>"
+            <?= (!in_array('mother_first_name', $editableFields) && $isLocked) ? 'readonly' : '' ?>>
         </div>
         <div class="col-md-3">
           <input type="text" name="mother_middle_name" id="mother_middle_name" class="form-control"
-            value="<?= htmlspecialchars($draftData['mother_middle_name'] ?? '') ?>">
+            value="<?= htmlspecialchars($draftData['mother_middle_name'] ?? '') ?>"
+            <?= (!in_array('mother_middle_name', $editableFields) && $isLocked) ? 'readonly' : '' ?>>
         </div>
       </div>
 
@@ -410,15 +491,18 @@ if ($_SESSION['max_step'] < $currentStep) {
         <div class="col-md-3"><label class="form-label" style="font-size: 0.95rem;">Guardian's Name:</label></div>
         <div class="col-md-3">
           <input type="text" name="guardian_last_name" id="guardian_last_name" class="form-control"
-            value="<?= htmlspecialchars($draftData['guardian_last_name'] ?? '') ?>">
+            value="<?= htmlspecialchars($draftData['guardian_last_name'] ?? '') ?>"
+            <?= (!in_array('guardian_last_name', $editableFields) && $isLocked) ? 'readonly' : '' ?>>
         </div>
         <div class="col-md-3">
           <input type="text" name="guardian_first_name" id="guardian_first_name" class="form-control"
-            value="<?= htmlspecialchars($draftData['guardian_first_name'] ?? '') ?>">
+            value="<?= htmlspecialchars($draftData['guardian_first_name'] ?? '') ?>"
+            <?= (!in_array('guardian_first_name', $editableFields) && $isLocked) ? 'readonly' : '' ?>>
         </div>
         <div class="col-md-3">
           <input type="text" name="guardian_middle_name" id="guardian_middle_name" class="form-control"
-            value="<?= htmlspecialchars($draftData['guardian_middle_name'] ?? '') ?>">
+            value="<?= htmlspecialchars($draftData['guardian_middle_name'] ?? '') ?>"
+            <?= (!in_array('guardian_middle_name', $editableFields) && $isLocked) ? 'readonly' : '' ?>>
         </div>
       </div>
     </div>
@@ -524,27 +608,37 @@ if ($_SESSION['max_step'] < $currentStep) {
 </script>
 
 
- <script>
-  document.addEventListener('DOMContentLoaded', () => {
-    const radios = document.querySelectorAll('input[name="accomplished_by"]');
-    const rows = document.querySelectorAll('[data-group]');
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const radios = document.querySelectorAll('input[name="accomplished_by"]');
+  const rows = document.querySelectorAll('[data-group]');
 
-    function updateRows() {
-      const selected = document.querySelector('input[name="accomplished_by"]:checked')?.value;
-      rows.forEach(row => {
-        const group = row.getAttribute('data-group');
-        row.querySelectorAll('input').forEach(input => {
-          input.disabled = (group !== selected);
-        });
+  function updateRows() {
+    const selected = document.querySelector('input[name="accomplished_by"]:checked')?.value;
+
+    rows.forEach(row => {
+      const group = row.getAttribute('data-group');
+      const isActive = (group === selected);
+
+      row.querySelectorAll('input').forEach(input => {
+        input.disabled = !isActive;
+
+        // ✅ clear values of non-selected groups
+        if (!isActive) {
+          input.value = '';
+        }
       });
-    }
-
-    radios.forEach(radio => {
-      radio.addEventListener('change', updateRows);
     });
+  }
 
-    updateRows(); // Initialize on page load
+  // listen for change
+  radios.forEach(radio => {
+    radio.addEventListener('change', updateRows);
   });
+
+  // run on page load
+  updateRows();
+});
 </script>
 
 <script>

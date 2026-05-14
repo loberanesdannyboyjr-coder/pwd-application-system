@@ -8,6 +8,7 @@ require_once __DIR__ . '/../../config/db.php';
 require_once __DIR__ . '/../../config/paths.php';
 session_start();
 
+
 // ensure session already started
 if (session_status() === PHP_SESSION_NONE) session_start();
 
@@ -17,8 +18,8 @@ if (empty($_SESSION['csrf_token'])) {
 }
 
 // AUTH
-if (empty($_SESSION['user_id']) || empty($_SESSION['is_admin'])) {
-    header('Location: ' . rtrim(APP_BASE_URL, '/') . '/src/admin_side/signin.php');
+if (!isset($_SESSION['username']) || !in_array($_SESSION['role'] ?? '', ['admin', 'super_admin'])) {
+    header('Location: ' . ADMIN_BASE . '/signin.php');
     exit;
 }
 
@@ -92,6 +93,16 @@ $docs_sql = "SELECT * FROM documentrequirements WHERE application_id = $1 LIMIT 
 $docs_res = @pg_query_params($conn, $docs_sql, [$app_id]);
 if ($docs_res && pg_num_rows($docs_res) > 0) $docs = pg_fetch_assoc($docs_res);
 
+/* ---------------- certification (CHO certificate) ------------------ */
+$cert = null;
+$cert_sql = "SELECT pwd_cert_path FROM certification WHERE application_id = $1 LIMIT 1";
+$cert_res = @pg_query_params($conn, $cert_sql, [$app_id]);
+
+if ($cert_res && pg_num_rows($cert_res) > 0) {
+    $cert = pg_fetch_assoc($cert_res);
+}
+
+
 /* ---------------- application_draft rows (merge JSON data) ------------------ */
 $draft_json_merged = [];
 $draft_q = "SELECT data, step FROM application_draft WHERE application_id = $1 ORDER BY step ASC, updated_at ASC";
@@ -122,18 +133,17 @@ function normalize_row(array $row): array {
 }
 
 function workflow_label(string $status): string {
-    switch (strtolower($status)) {
-        case 'draft':        return 'DRAFT';
-        case 'submitted':    return 'SUBMITTED';
-        case 'pdao_review':  return 'PDAO REVIEW';
-        case 'cho_review':   return 'CHO REVIEW';
-        case 'approved':     return 'ACCEPTED';
-        case 'verified':     return 'ACCEPTED';
-        case 'rejected':
-        case 'pdao_rejected':return 'FEEDBACK';
-        default:             return strtoupper($status);
-    }
+    return match (strtolower($status)) {
+        'draft'          => 'DRAFT',
+        'pdao_review'    => 'UNDER PDAO REVIEW',
+        'cho_review'     => 'FOR CHO REVIEW',
+        'cho_approved'   => 'CHO APPROVED',
+        'pdao_approved'  => 'APPROVED',
+        'rejected'       => 'DISAPPROVED',
+        default          => strtoupper($status),
+    };
 }
+
 
 
 /* ---------------- build $draftData (priority: drafts -> applicant -> application -> docs) ------------------ */
@@ -146,7 +156,7 @@ foreach ($draft_json_merged as $k => $v) {
 $normalizedApp = normalize_row($application ?: []);
 $normalizedDocs = normalize_row($docs ?: []);
 
-$draftData = array_merge($normalizedApp, $normalizedDocs, $normalizedDraft);
+$draftData = array_merge($normalizedDraft, $normalizedApp, $normalizedDocs);
 
 /* ===============================
    PDAO VIEW — REMOVE MEDICAL DATA
@@ -207,6 +217,16 @@ $autoMap = [
     'gsis_no'    => ['gsis_no','gsis'],
     'pagibig_no' => ['pagibig_no','pagibig'],
     'philhealth_no'=> ['philhealth_no','philhealth'],
+    'organization_affiliated' => ['organization_affiliated','organization'],
+    'office_address' => ['office_address','office'],
+
+    'father_last_name' => ['father_last_name'],
+    'father_first_name' => ['father_first_name'],
+    'father_middle_name' => ['father_middle_name'],
+
+    'mother_last_name' => ['mother_last_name'],
+    'mother_first_name' => ['mother_first_name'],
+    'mother_middle_name' => ['mother_middle_name'],
     'contact_person_name' => ['contact_person_name','contact_person','contactperson'],
     'contact_person_no' => ['contact_person_no','contactperson_no','emergency_contact_no','emergency_contact']
 ];
@@ -223,19 +243,45 @@ foreach ($autoMap as $target => $variants) {
 
 /* ---------- build draftData['files'] but EXCLUDE the 1x1 pic from the files list ---------- */
 $draftData['files'] = [];
+
 $map_docs = [
-    'bodypic_path'       => 'Whole Body Picture',
+    'bodypic_path' => 'Whole Body Picture',
     'barangaycert_path' => 'Barangay Certificate',
-    'old_pwd_id_path'   => 'Old PWD ID',
+    'proof_disability_path'=> 'Proof of Disability',
+    'medicalcert_path' => 'Medical Certificate',
+    'old_pwd_id_path' => 'Old PWD ID',
     'affidavit_loss_path' => 'Affidavit of Loss'
-    // medicalcert_path REMOVED for PDAO
-    // cho_cert_path REMOVED for PDAO
 ];
+
+/* ---------- add CHO issued certificate ---------- */
+
+if (!empty($cert['pwd_cert_path'])) {
+
+    $stored = $cert['pwd_cert_path'];
+
+    $draftData['files'][] = [
+        'label' => 'PWD Certificate',
+        'path'  => $stored,
+        'url'   => build_url_from_stored($stored),
+        'server_candidates' => server_path_candidates($stored),
+        'server_found' => find_first_existing(server_path_candidates($stored))
+    ];
+}
+
+$wf = strtolower($application['workflow_status'] ?? '');
 
 if ($docs) {
     foreach ($map_docs as $col => $label) {
+
+        // hide CHO certificate until CHO approved
+        if ($col === 'pwd_cert_path' && $wf !== 'cho_approved' && $wf !== 'pdao_approved') {
+            continue;
+        }
+
         if (!empty($docs[$col])) {
+
             $stored = $docs[$col];
+
             $draftData['files'][] = [
                 'label' => $label,
                 'path'  => $stored,
@@ -256,7 +302,7 @@ $fileCandidates = [
     'document_path',
     'barangaycert_path',
     'old_pwd_id_path',
-    'affidavit_loss_path'
+    'affidavit_loss_path',
     // medicalcert_path REMOVED for PDAO
 ];
 foreach ($fileCandidates as $c) {
@@ -282,11 +328,6 @@ foreach ($fileCandidates as $c) {
         ];
     }
 }
-
-$draftData['files'] = array_filter(
-    $draftData['files'],
-    fn($f) => stripos($f['label'], 'medical') === false
-);
 
 
 /* ---------- determine header pic (prefers docs.pic_1x1_path then application.pic_1x1_path or draft json) ---------- */
@@ -404,44 +445,65 @@ if (!empty($_GET['debug']) && !empty($_SESSION['is_admin'])) {
     .files-list li { display:flex; align-items:center; justify-content:space-between; padding:.45rem .5rem; border-bottom:1px solid #eef0f3; }
     .card-body .mt-4.border-top { margin-top:1.8rem; }
 
- <?php include __DIR__ . '/../../hero/navbar_admin.php'; ?>
-
   </style>
 </head>
 <body>
+<?php include __DIR__ . '/../../hero/navbar_admin.php'; ?>
+
  <div class="container mt-4">
+
+         <!-- Back button -->
+        <a href="<?= h(rtrim(APP_BASE_URL, '/') . '/src/admin_side/application_review.php') ?>"
+            class="btn btn-sm fw-semibold">
+            <i class="bi bi-arrow-left me-1"></i>
+            Back
+        </a>
+
     <div class="card shadow-sm">
 
       <!-- HEADER BLUE BAR -->
       <div class="card-header p-3 d-flex justify-content-between align-items-center" 
-           style="background: linear-gradient(90deg, #2d6be6, #5b9df7); color: #fff;">
-        
-        <div>
-          <small class="text-white-100">
+           style="background: #4b5563; color: #fff;">
+        <div class="d-flex align-items-center gap-3">
+
+        <!-- Application number -->
+        <small class="text-white-100">
             Review of application #
-            <?= h($application['application_number'] ?? ('PWD-'.date('Y').'-'.str_pad($app_id,5,'0',STR_PAD_LEFT))) ?>
-          </small>
+            <?= h(
+            $application['application_number']
+            ?? ('PWD-' . date('Y') . '-' . str_pad($app_id, 5, '0', STR_PAD_LEFT))
+            ) ?>
+        </small>
+
         </div>
 
+
         <div class="text-end d-flex align-items-center">
-          <?php
-            // workflow_status badge (friendly color mapping)
-            $wf = $application['workflow_status'] ?? ($application['status'] ?? 'Pending');
-            $badgeClass = 'bg-secondary';
-            switch (strtolower((string)$wf)) {
-              case 'submitted':       $badgeClass = 'bg-warning text-dark'; break;
-              case 'pdao_review':     $badgeClass = 'bg-info text-dark'; break;
-              case 'cho_review':      $badgeClass = 'bg-primary'; break;
-              case 'verified':        $badgeClass = 'bg-success'; break;
-              case 'approved':        $badgeClass = 'bg-success'; break;
-              case 'pdao_rejected':
-              case 'rejected':        $badgeClass = 'bg-danger'; break;
-              default:                $badgeClass = 'bg-secondary'; break;
-            }
-          ?>
-<span class="badge <?= h($badgeClass) ?> me-3">
-  <?= h(workflow_label((string)$wf)) ?>
-</span>
+            <?php
+            // workflow_status badge (NEW workflow)
+            $wf = strtolower($application['workflow_status'] ?? '');
+
+            $badgeClass = match ($wf) {
+                'pdao_review'   => 'bg-warning text-dark',
+                'cho_review'    => 'bg-primary',
+                'cho_approved'  => 'bg-info text-dark',
+                'pdao_approved' => 'bg-success',
+                'rejected'      => 'bg-danger',
+                default         => 'bg-secondary',
+            };
+            ?>
+
+
+
+        <span class="badge <?= h($badgeClass) ?> me-3">
+        <?= h(workflow_label((string)$wf)) ?>
+        </span>
+
+        <?php if (!empty($application['remarks']) && $wf === 'rejected'): ?>
+        <div class="alert alert-danger py-2 px-3 ms-3 mb-0">
+        <strong>Disapproval Reason:</strong> <?= h($application['remarks']) ?>
+        </div>
+        <?php endif; ?>
 
           <?php if (!empty($draftData['pic_url'])):
               // clickable header photo -> opens via this page's file serving if possible (use basename)
@@ -458,9 +520,18 @@ if (!empty($_GET['debug']) && !empty($_SESSION['is_admin'])) {
       </div>
       <!-- END HEADER -->
 
+    
+
       <div class="card-body">
 
         <?php
+                function v($key, $fallback = '-') {
+            global $draftData;
+
+            return !empty($draftData[$key])
+                ? htmlspecialchars($draftData[$key])
+                : $fallback;
+        }
             $partial = __DIR__ . '/partials/form5_readonly.php';
             $fallback = __DIR__ . '/partials/application_summary_partial.php';
             if (file_exists($partial)) {
@@ -472,95 +543,229 @@ if (!empty($_GET['debug']) && !empty($_SESSION['is_admin'])) {
             }
         ?>
 
-<!-- PDAO action form -> use api/admin_action.php -->
-<div class="mt-4 border-top pt-3">
-<form id="pdao-action-form" method="post" action="<?= h(rtrim(APP_BASE_URL, '/') . '/api/admin_action.php') ?>">
-    <input type="hidden" name="application_id" value="<?= h($app_id) ?>">
-    <?php if (empty($_SESSION['csrf_token'])) $_SESSION['csrf_token'] = bin2hex(random_bytes(24)); ?>
-    <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token']) ?>">
+    <!-- PDAO action form -> use api/workflow_action.php -->
+    <form id="pdao-action-form"
+      method="post"
+      action="/api/admin_action.php">
+        <input type="hidden" name="application_id" value="<?= h($app_id) ?>">
+        <?php if (empty($_SESSION['csrf_token'])) $_SESSION['csrf_token'] = bin2hex(random_bytes(24)); ?>
+        <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token']) ?>">
 
-    <div class="mb-3">
-        <label class="form-label">
-            Remarks (optional — required when rejecting / requesting info)
-        </label>
-        <textarea id="pdao-remarks"
-                  name="remarks"
-                  class="form-control"
-                  rows="3"
-                  placeholder="Enter remarks..."></textarea>
-    </div>
 
-<!-- BUTTON ROW (RIGHT-ALIGNED WITH ICONS) -->
+<?php
+$currentStatus = strtolower($application['workflow_status'] ?? '');
+?>
+
+<?php if ($currentStatus === 'pdao_review'): ?>
+
 <div class="d-flex justify-content-end gap-2">
 
- <!-- Reject -->
-    <button type="button"
-            class="btn btn-danger"
-            data-action="reject">
-        <i class="bi bi-x-circle-fill me-1"></i>
-        Reject
-    </button>
-    
+  <!-- Disapprove -->
+  <button type="button"
+          id="btnDisapprove"
+          class="btn btn-danger">
+    <i class="bi bi-x-circle-fill me-1"></i>
+    Disapprove
+  </button>
 
-    <!-- Request More Info -->
-    <button type="button"
-            class="btn btn-warning"
-            data-action="request_more_info">
-        <i class="bi bi-info-circle-fill me-1"></i>
-        Request More Info
-    </button>
+  <!-- Accept -->
+  <button type="button"
+        id="btnAccept"
+        class="btn btn-success">
+  <i class="bi bi-send-check me-1"></i>
+  Forward to CHO
+</button>
 
-      <!-- Forward to CHO (Approve) -->
-    <button type="button"
-            class="btn btn-success"
-            data-action="forward_to_cho">
-        <i class="bi bi-check-circle-fill me-1"></i>
-        Forward to CHO
-    </button>
-   
+</div>
+
+<?php else: ?>
+
+<?php endif; ?>
+
+
+</div>
+
+<?php if($application['workflow_status'] === 'cho_approved'): ?>
+
+<form method="POST" action="pdao_finalize.php">
+
+<input type="hidden" name="application_id"
+value="<?= $application['application_id'] ?>">
+
+<input type="text"
+name="pwd_number"
+class="form-control"
+placeholder="PWD-2026-00002"
+required>
+
+<button class="btn btn-success mt-2">
+Issue PWD ID
+</button>
+
+</form>
+
+<?php endif; ?>
+
+
+
 </div>
 
 </form>
 </div>
 
+<!-- Disapproval Modal -->
+<div class="modal fade" id="disapproveModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+
+      <div class="modal-header">
+        <h5 class="modal-title text-danger fw-semibold">
+          Reason for Disapproval
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+
+      <div class="modal-body">
+        <div class="mb-3">
+          <textarea id="modal-remarks"
+                    class="form-control"
+                    rows="4"
+                    placeholder="Enter reason for disapproval..."></textarea>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary"
+                data-bs-dismiss="modal">
+          Cancel
+        </button>
+
+        <button class="btn btn-danger"
+                id="confirmDisapprove">
+          Submit
+        </button>
+      </div>
+
+    </div>
+  </div>
+</div>
+<!-- Forward to CHO Confirmation Modal -->
+<div class="modal fade" id="acceptModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+
+      <div class="modal-header">
+        <h5 class="modal-title text-success fw-semibold">
+          Confirm Forwarding
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+
+      <div class="modal-body text-center">
+        <p class="mb-0">
+          <strong   >Are you sure you want to forward this application to CHO for medical evaluation?</strong>
+        </p>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary"
+                data-bs-dismiss="modal">
+          Cancel
+        </button>
+
+        <button class="btn btn-success"
+                id="confirmAccept">
+          Forward to CHO
+        </button>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
 
 <script>
-document.querySelectorAll('#pdao-action-form button[data-action]').forEach(btn=>{
-  btn.addEventListener('click', async function(e){
-    const action = this.dataset.action;
-    const remarks = document.getElementById('pdao-remarks').value.trim();
-    // require remarks for certain actions client-side
-    if ((action === 'reject' || action === 'request_more_info') && remarks === '') {
-      alert('Remarks are required for this action.');
-      return;
-    }
-    // send via fetch
-    const form = document.getElementById('pdao-action-form');
-    const data = new FormData(form);
-    data.set('action', action);
-    try {
-      const resp = await fetch(form.action, { method: 'POST', body: data });
-      const json = await resp.json();
-      if (!resp.ok || !json.success) {
-        alert(json.error || 'Server error');
-        return;
-      }
-      // redirect if server asks
-      if (json.redirect) {
-        window.location.href = json.redirect;
-      } else {
-        // otherwise reload to show updated status and history
-        window.location.reload();
-      }
-    } catch(err){
-      console.error(err);
-      alert('Network error');
-    }
-  });
+const disapproveModal = new bootstrap.Modal(
+  document.getElementById('disapproveModal')
+);
+
+document.getElementById('btnDisapprove').addEventListener('click', () => {
+  document.getElementById('modal-remarks').value = '';
+  disapproveModal.show();
 });
+
+const acceptModal = new bootstrap.Modal(
+  document.getElementById('acceptModal')
+);
+
+document.getElementById('btnAccept').addEventListener('click', () => {
+  acceptModal.show();
+});
+
+document.getElementById('confirmAccept').addEventListener('click', () => {
+  acceptModal.hide();
+  submitAction('endorse_to_cho');
+});
+
+document.getElementById('confirmDisapprove').addEventListener('click', () => {
+  const remarks = document.getElementById('modal-remarks').value.trim();
+
+  if (!remarks) {
+    alert('Remarks are required when disapproving an application.');
+    return;
+  }
+
+  submitAction('pdao_disapprove', remarks);
+});
+
+function submitAction(action, remarks = '') {
+  const form = document.getElementById('pdao-action-form');
+  const data = new FormData(form);
+  data.set('action', action);
+
+  if (remarks) {
+    data.set('remarks', remarks);
+  }
+
+fetch(form.action, {
+  method: 'POST',
+  body: data
+})
+.then(res => res.text())
+.then(text => {
+
+  console.log("SERVER RESPONSE:", text);
+
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch (e) {
+    alert("Invalid server response. Check console.");
+    console.log(text);
+    return;
+  }
+
+  if (!json.success) {
+    alert(json.error || 'Server error');
+    return;
+  }
+
+  if (json.redirect) {
+    window.location.href = json.redirect;
+  } else {
+    window.location.reload();
+  }
+
+})
+.catch(err => {
+  console.error(err);
+  alert('Network error');
+});
+}
 </script>
 
-
-
 </body>
+
 </html>

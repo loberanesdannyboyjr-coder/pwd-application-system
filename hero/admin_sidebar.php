@@ -1,3 +1,8 @@
+<?php
+session_start();
+require_once __DIR__ . '/../../config/paths.php';
+?>
+
 <!DOCTYPE html>
 <html lang="en">
 

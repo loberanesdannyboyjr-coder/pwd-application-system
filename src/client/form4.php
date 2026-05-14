@@ -2,6 +2,8 @@
 session_start();
 require_once '../../config/db.php';
 require_once '../../includes/DraftHelper.php';
+require_once '../../includes/UploadHelper.php';
+
 
 /* ===============================
    AUTH
@@ -19,10 +21,37 @@ $applicant_id   = $_SESSION['applicant_id'];
 $application_id = $_SESSION['application_id'];
 $step = 4;
 
+$type = strtolower($_SESSION['application_type'] ?? 'new');
+if ($type === 'renewal') $type = 'renew';
+
 /* ===============================
    LOAD DRAFT
 ================================ */
 $draftData = loadDraftData($step, $application_id);
+
+if ($type !== 'new') {
+
+    $res = pg_query_params(
+        $conn,
+        "SELECT ad.data
+         FROM application a
+         JOIN application_draft ad 
+           ON a.application_id = ad.application_id
+         WHERE a.applicant_id = $1
+           AND a.workflow_status = 'pdao_approved'
+           AND ad.step = 4
+         ORDER BY a.created_at DESC
+         LIMIT 1",
+        [$applicant_id]
+    );
+
+    if ($res && pg_num_rows($res) > 0) {
+        $row = pg_fetch_assoc($res);
+        $approvedData = json_decode($row['data'], true);
+
+        $draftData = array_merge($approvedData, $draftData ?? []);
+    }
+}
 
 $proofExists = true;
 
@@ -32,27 +61,74 @@ if (($draftData['workflow_status'] ?? 'draft') !== 'draft') {
     exit('Application already submitted. Editing is disabled.');
 }
 
-/* ===============================
-   LOAD documentrequirements SAFELY
-================================ */
-$docRow = [];
+// ✅ Always prioritize CURRENT application first
+$sourceApplicationId = $application_id;
 
-// Base columns
+// Only fallback to previous IF current has no record yet
+$checkRes = pg_query_params(
+    $conn,
+    "SELECT 1 FROM documentrequirements WHERE application_id = $1",
+    [$application_id]
+);
+
+if ($type !== 'new' && (!$checkRes || pg_num_rows($checkRes) === 0)) {
+
+    $prevRes = pg_query_params(
+        $conn,
+        "SELECT application_id
+         FROM application
+         WHERE applicant_id = $1
+           AND workflow_status = 'pdao_approved'
+         ORDER BY created_at DESC
+         LIMIT 1",
+        [$applicant_id]
+    );
+
+    if ($prevRes && pg_num_rows($prevRes) > 0) {
+        $sourceApplicationId = pg_fetch_result($prevRes, 0, 'application_id');
+    }
+}
+
+// 🔥 Load documents from correct source
 $sql = "
 SELECT
     bodypic_path,
+    pic_1x1_path,
     barangaycert_path,
     medicalcert_path,
     old_pwd_id_path,
     affidavit_loss_path,
-    cho_cert_path,
     proof_disability_path
 FROM public.documentrequirements
 WHERE application_id = $1
 LIMIT 1
 ";
 
-$res = pg_query_params($conn, $sql, [$application_id]);
+$res = pg_query_params($conn, $sql, [$sourceApplicationId]);
+
+if (!$res || pg_num_rows($res) === 0) {
+
+    // fallback ONLY if no record yet
+    if ($type !== 'new') {
+        $prevRes = pg_query_params(
+            $conn,
+            "SELECT application_id
+             FROM application
+             WHERE applicant_id = $1
+               AND workflow_status = 'pdao_approved'
+             ORDER BY created_at DESC
+             LIMIT 1",
+            [$applicant_id]
+        );
+
+        if ($prevRes && pg_num_rows($prevRes) > 0) {
+            $sourceApplicationId = pg_fetch_result($prevRes, 0, 'application_id');
+
+            $res = pg_query_params($conn, $sql, [$sourceApplicationId]);
+        }
+    }
+}
+$docRow = [];
 if ($res && pg_num_rows($res) > 0) {
     $docRow = pg_fetch_assoc($res);
 }
@@ -67,136 +143,189 @@ $defaults = [
     'medicalcert_path'      => null,
     'old_pwd_id_path'       => null,
     'affidavit_loss_path'   => null,
-    'cho_cert_path'         => null,
     'proof_disability_path' => null,
+    'pic_1x1_path' => null,
 ];
-$draftData = array_merge($draftData ?? [], array_merge($defaults, $docRow));
+$draftData = array_merge($defaults, $docRow, $draftData ?? []);
 
-/* ===============================
-   NORMALIZE TYPE
-================================ */
-$type = strtolower($_SESSION['application_type'] ?? 'new');
-if ($type === 'renewal') $type = 'renew';
-
-/* ===============================
-   HANDLE POST
-================================ */
-/* ===============================
-   HANDLE POST
-================================ */
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
-    // 🔒 REQUIRED DOCUMENT VALIDATION (ADD THIS)
-    $required = [];
+    $formData = $_POST;
 
-    if ($type === 'new') {
-        $required = ['bodypic_path', 'barangaycert_path', 'medicalcert_path'];
-    }
-    elseif ($type === 'renew') {
-        $required = ['barangaycert_path', 'medicalcert_path', 'old_pwd_id_path'];
-    }
-    elseif ($type === 'lost') {
-        $required = ['barangaycert_path', 'medicalcert_path', 'affidavit_loss_path'];
-    }
-
-    foreach ($required as $field) {
-        $val = $_POST[$field] ?? null;
-
-        if (empty($val) || $val === '__REMOVE__') {
-            http_response_code(400);
-            exit('Missing required document.');
+    // 🔥 Normalize remove flags
+    foreach ($formData as $k => $v) {
+        if ($v === '__REMOVE__') {
+            $formData[$k] = null;
         }
     }
 
-    // ✅ NOW it is safe to continue saving drafts & uploads
+    /* ===============================
+       UPLOADS
+    =============================== */
 
+    function handleUpload($key, $field, $types) {
+        return uploadAndReplace(
+            $GLOBALS['conn'],
+            $GLOBALS['application_id'],
+            $key,
+            $field,
+            $types
+        );
+    }
 
-    // Save non-file draft fields
-    saveDraftData($step, $_POST, $application_id);
+    // Always allowed
+    if ($p = handleUpload('barangaycert','barangaycert_path',['jpg','jpeg','png','pdf','doc','docx'])) {
+        $formData['barangaycert_path'] = $p;
+    }
 
-    // Ensure documentrequirements row exists
-    pg_query_params(
-        $conn,
-        "INSERT INTO public.documentrequirements (application_id)
-         SELECT $1
-         WHERE NOT EXISTS (
-           SELECT 1 FROM public.documentrequirements WHERE application_id = $1
-         )",
-        [$application_id]
+    if ($p = handleUpload('medicalcert','medicalcert_path',['jpg','jpeg','png','pdf','doc','docx'])) {
+        $formData['medicalcert_path'] = $p;
+    }
+
+    if ($p = handleUpload('proofdisability','proof_disability_path',['jpg','jpeg','png'])) {
+        $formData['proof_disability_path'] = $p;
+    }
+
+    // NEW only
+    if ($type === 'new') {
+        if ($p = handleUpload('bodypic','bodypic_path',['jpg','jpeg','png'])) {
+            $formData['bodypic_path'] = $p;
+
+            // 🔥 Use bodypic as 1x1 automatically
+            $formData['pic_1x1_path'] = $p;
+        }
+    }
+
+    // RENEW
+    if ($type === 'renew') {
+        if ($p = handleUpload('oldpwdid','old_pwd_id_path',['jpg','jpeg','png','pdf'])) {
+            $formData['old_pwd_id_path'] = $p;
+        }
+    }
+
+    // LOST
+    if ($type === 'lost') {
+        if ($p = handleUpload('affidavit','affidavit_loss_path',['jpg','jpeg','png','pdf'])) {
+            $formData['affidavit_loss_path'] = $p;
+        }
+    }
+
+    /* ===============================
+       REUSE OLD DATA (CRITICAL FIX)
+    =============================== */
+
+    // Get previous approved record
+    $prevRes = pg_query_params($conn,
+        "SELECT d.*
+         FROM application a
+         LEFT JOIN documentrequirements d 
+           ON d.application_id = a.application_id
+         WHERE a.applicant_id = $1
+         AND a.workflow_status = 'pdao_approved'
+         ORDER BY a.created_at DESC
+         LIMIT 1",
+        [$applicant_id]
     );
 
-    // File → column map
-    $uploads = [
-        'barangaycert'    => 'barangaycert_path',
-        'medicalcert'     => 'medicalcert_path',
-        'proofdisability' => 'proof_disability_path',
+    $prev = ($prevRes && pg_num_rows($prevRes)) 
+        ? pg_fetch_assoc($prevRes)
+        : [];
+
+    // 🔥 Smart reuse logic
+    $fields = [
+        'pic_1x1_path',
+        'bodypic_path',
+        'barangaycert_path',
+        'medicalcert_path',
+        'proof_disability_path',
+        'old_pwd_id_path',
+        'affidavit_loss_path'
     ];
-    if ($type === 'new')   $uploads['bodypic']   = 'bodypic_path';
-    if ($type === 'renew') $uploads['oldpwdid']  = 'old_pwd_id_path';
-    if ($type === 'lost')  $uploads['affidavit'] = 'affidavit_loss_path';
 
-    // Upload dir
-    $root = realpath(__DIR__ . '/../../');
-    $uploadAbs = $root . '/uploads';
-    if (!is_dir($uploadAbs)) mkdir($uploadAbs, 0775, true);
+    foreach ($fields as $f) {
 
-    foreach ($uploads as $field => $column) {
+        if (empty($formData[$f])) {
 
-        // Skip proof if column missing
-        if ($column === 'proof_disability_path' && !$proofExists) continue;
+            // 1. keep existing current
+            if (!empty($draftData[$f])) {
+                $formData[$f] = $draftData[$f];
+            }
 
-        $postedPath = trim($_POST[$column] ?? '');
-        $newPublicPath = null;
-
-        // Handle upload
-        if (!empty($_FILES[$field]) && $_FILES[$field]['error'] === UPLOAD_ERR_OK) {
-            $orig = $_FILES[$field]['name'];
-            $ext  = strtolower(pathinfo($orig, PATHINFO_EXTENSION));
-            $base = preg_replace('/[^A-Za-z0-9._-]/', '_', pathinfo($orig, PATHINFO_FILENAME));
-            $name = time() . '_' . $base . ($ext ? ".$ext" : '');
-
-            if (move_uploaded_file($_FILES[$field]['tmp_name'], "$uploadAbs/$name")) {
-                $newPublicPath = '/PWD-Application-System/uploads/' . $name;
+            // 2. fallback to previous approved
+            elseif (!empty($prev[$f])) {
+                $formData[$f] = $prev[$f];
             }
         }
-
-$shouldUpdate = false;
-
-/* 1️⃣ New file uploaded */
-if ($newPublicPath !== null) {
-    $valueToSave = $newPublicPath;
-    $shouldUpdate = true;
-}
-elseif ($postedPath === '__REMOVE__') {
-    $valueToSave = null;
-    $shouldUpdate = true;
-}
-elseif (!empty($postedPath)) {
-    $valueToSave = $postedPath;
-    $shouldUpdate = true;
-}
-
-/* 3️⃣ Otherwise → DO NOTHING (keep existing DB value) */
-if ($shouldUpdate) {
-    pg_query_params(
-        $conn,
-        "UPDATE public.documentrequirements
-         SET {$column} = $1,
-             updated_at = NOW()
-         WHERE application_id = $2",
-        [$valueToSave, $application_id]
-    );
-}
     }
 
-    // Navigation
-    if (($_POST['nav'] ?? '') === 'back') {
-        header('Location: form3.php?type=' . urlencode($type));
-        exit;
-    }
-    if (($_POST['nav'] ?? '') === 'next') {
-        header('Location: form5.php?type=' . urlencode($type));
-        exit;
+    /* ===============================
+       SAVE DRAFT
+    =============================== */
+    saveDraftData(4, $formData, $application_id);
+
+    /* ===============================
+       SAVE TO DATABASE
+    =============================== */
+
+    pg_query_params($conn, "
+    INSERT INTO documentrequirements (
+        application_id,
+        pic_1x1_path,
+        bodypic_path,
+        barangaycert_path,
+        medicalcert_path,
+        proof_disability_path,
+        old_pwd_id_path,
+        affidavit_loss_path
+    )
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+    ON CONFLICT (application_id) DO UPDATE SET
+        pic_1x1_path = EXCLUDED.pic_1x1_path,
+        bodypic_path = EXCLUDED.bodypic_path,
+        barangaycert_path = EXCLUDED.barangaycert_path,
+        medicalcert_path = EXCLUDED.medicalcert_path,
+        proof_disability_path = EXCLUDED.proof_disability_path,
+        old_pwd_id_path = EXCLUDED.old_pwd_id_path,
+        affidavit_loss_path = EXCLUDED.affidavit_loss_path
+    ", [
+        $application_id,
+        $formData['pic_1x1_path'] ?? null,
+        $formData['bodypic_path'] ?? null,
+        $formData['barangaycert_path'] ?? null,
+        $formData['medicalcert_path'] ?? null,
+        $formData['proof_disability_path'] ?? null,
+        $formData['old_pwd_id_path'] ?? null,
+        $formData['affidavit_loss_path'] ?? null
+    ]);
+
+    header("Location: form5.php?type=" . urlencode($type));
+    exit;
+}
+
+// ===============================
+// AUTO COPY 1x1 PHOTO (RENEW/LOST)
+// ===============================
+if (in_array($type, ['renew','lost'])) {
+
+    if (empty($formData['pic_1x1_path'])) {
+
+        $prevRes = pg_query_params($conn,
+            "SELECT d.pic_1x1_path
+             FROM application a
+             LEFT JOIN documentrequirements d 
+               ON d.application_id = a.application_id
+             WHERE a.applicant_id = $1
+             AND a.workflow_status = 'pdao_approved'
+             AND d.pic_1x1_path IS NOT NULL
+             ORDER BY a.created_at DESC
+             LIMIT 1",
+            [$applicant_id]
+        );
+
+        if ($prevRes && pg_num_rows($prevRes)) {
+            $prev = pg_fetch_assoc($prevRes);
+            $formData['pic_1x1_path'] = $prev['pic_1x1_path'];
+        }
     }
 }
 
@@ -388,10 +517,10 @@ if ($_SESSION['max_step'] < $currentStep) {
        class="d-none">
   </div>
 
-  <?php $hasProof = !empty($draftData['proof_disability_path'] ?? ''); ?>
+  <!-- ================= PROOF OF DISABILITY ================= -->
 
-<!-- ================= PROOF OF DISABILITY ================= -->
-<?php $hasProof = !empty($draftData['proof_disability_path']); ?>
+
+  <?php $hasProof = !empty($draftData['proof_disability_path'] ?? ''); ?>
 
 <div class="mb-4">
   <label class="form-label fw-semibold">
@@ -401,6 +530,7 @@ if ($_SESSION['max_step'] < $currentStep) {
 
   <div class="upload-box text-center p-4 border rounded bg-light shadow-sm">
 
+    <!-- Placeholder -->
     <div id="proofdisabilityPlaceholder"
          style="<?= $hasProof ? 'display:none;' : '' ?>;cursor:pointer"
          onclick="document.getElementById('proofdisability').click()">
@@ -408,6 +538,7 @@ if ($_SESSION['max_step'] < $currentStep) {
       <div class="small text-muted">PNG / JPG only</div>
     </div>
 
+    <!-- Preview -->
     <div id="proofdisabilityPreviewWrap" style="<?= $hasProof ? '' : 'display:none;' ?>">
       <?php if ($hasProof && is_image_ext($draftData['proof_disability_path'])): ?>
         <img src="<?= htmlspecialchars($draftData['proof_disability_path']) ?>"
@@ -426,33 +557,21 @@ if ($_SESSION['max_step'] < $currentStep) {
     </div>
   </div>
 
+  <!-- ✅ hidden path (IMPORTANT) -->
   <input type="hidden"
-         id="proofdisability_path"
+         id="proof_disability_path"
          name="proof_disability_path"
          value="<?= htmlspecialchars($draftData['proof_disability_path'] ?? '') ?>">
 
-<input type="file"
-       id="proofdisability"
-       name="proofdisability"
-       style="position:absolute; left:-9999px;">
+  <!-- actual file input -->
+  <input type="file"
+         id="proofdisability"
+         name="proofdisability"
+         accept=".jpg,.jpeg,.png"
+         style="position:absolute; left:-9999px;">
 </div>
 
-        <!-- CHO Certificate (read-only for applicants) -->
-        <div class="mb-4">
-          <label class="form-label fw-semibold">Certificate from City Health Office (CHO):</label>
-          <div class="upload-box text-center p-4 border rounded bg-light shadow-sm">
-            <img src="https://cdn-icons-png.flaticon.com/512/1827/1827951.png" width="50" class="mb-2" alt="">
-            <p class="fw-semibold mb-1">Uploaded by CHO after verification</p>
-            <?php if (!empty($draftData['cho_cert_path'])): ?>
-              <div class="mt-2">
-                <a href="<?= htmlspecialchars($draftData['cho_cert_path']) ?>" target="_blank" class="btn btn-sm btn-success">View Certificate</a>
-              </div>
-            <?php else: ?>
-              <div class="text-muted mt-2">Pending upload by CHO</div>
-            <?php endif; ?>
-          </div>
-          <input type="hidden" name="cho_cert_path" value="<?= htmlspecialchars($draftData['cho_cert_path'] ?? '') ?>">
-        </div>
+
 
       <!-- Renewal only -->
       <?php if ($type === 'renew'): ?>
@@ -523,11 +642,10 @@ if ($_SESSION['max_step'] < $currentStep) {
       </div>
       <?php endif; ?>
 
-
     <!-- NAV -->
     <div class="d-flex justify-content-between mt-4">
-      <button type="submit" name="nav" value="back" class="btn btn-outline-primary">Back</button>
-      <button type="submit" name="nav" value="next" class="btn btn-primary px-4">Save & Continue</button>
+    <a href="form3.php?type=<?= $type ?>" class="btn btn-outline-primary">Back</a>
+    <button class="btn btn-primary">Save & Continue</button>
     </div>
 
           </form>
@@ -548,7 +666,6 @@ if ($_SESSION['max_step'] < $currentStep) {
         const file = this.files[0];
         if (!file) return;
 
-        hiddenPath.value = ''; // ✅ IMPORTANT
         ph.style.display = 'none';
         wrap.style.display = '';
         nameEl.textContent = file.name;
@@ -561,10 +678,17 @@ if ($_SESSION['max_step'] < $currentStep) {
       });
     }
 
-    function removeFile(baseId, ev){
+    function removeFile(baseId, ev, pathField = null){
       if (ev) ev.stopPropagation();
+
       document.getElementById(baseId).value = '';
-      document.getElementById(baseId + '_path').value = '__REMOVE__';
+
+      const hidden = pathField
+          ? document.getElementById(pathField)
+          : document.getElementById(baseId + '_path');
+
+      if (hidden) hidden.value = '__REMOVE__';
+
       document.getElementById(baseId + 'PreviewWrap').style.display = 'none';
       document.getElementById(baseId + 'Placeholder').style.display = '';
     }
@@ -574,21 +698,6 @@ if ($_SESSION['max_step'] < $currentStep) {
         .forEach(setupUploadWithRemove);
     });
     </script>
-
-
-          <script>
-
-          document.addEventListener('DOMContentLoaded', () => {
-          setupUploadWithRemove('bodypic');
-          setupUploadWithRemove('barangaycert');
-          setupUploadWithRemove('medicalcert');
-          setupUploadWithRemove('proofdisability');
-          setupUploadWithRemove('oldpwdid');
-          setupUploadWithRemove('affidavit');
-        });
-
-
-          </script>
 
           <script>
     document.querySelectorAll('.step').forEach(step => {
@@ -610,61 +719,52 @@ if ($_SESSION['max_step'] < $currentStep) {
     });
     </script>
 
-        <script>
-    document.querySelector('form').addEventListener('submit', function (e) {
+<script>
+document.querySelector('form').addEventListener('submit', function (e) {
+  const type = <?= json_encode($type) ?>;
 
-      const type = "<?= $type ?>";
-      let missing = [];
+  const requiredMap = {
+    new: [
+      { path: 'bodypic_path', file: 'bodypic' },
+      { path: 'barangaycert_path', file: 'barangaycert' },
+      { path: 'medicalcert_path', file: 'medicalcert' }
+    ],
+    renew: [
+      { path: 'old_pwd_id_path', file: 'oldpwdid' } // 🔥 only strictly required
+    ],
+    lost: [
+      { path: 'affidavit_loss_path', file: 'affidavit' } // 🔥 only strictly required
+    ]
+  };
 
-      const requiredFields = {
-        new: ['bodypic_path', 'barangaycert_path', 'medicalcert_path'],
-        renew: ['barangaycert_path', 'medicalcert_path', 'old_pwd_id_path'],
-        lost: ['barangaycert_path', 'medicalcert_path', 'affidavit_loss_path']
-      };
+  const alwaysRequired = [
+    { path: 'barangaycert_path', file: 'barangaycert' },
+    { path: 'medicalcert_path', file: 'medicalcert' }
+  ];
 
-      requiredFields[type].forEach(field => {
-        const el = document.querySelector(`[name="${field}"]`);
-        if (!el || !el.value || el.value === '__REMOVE__') {
-          missing.push(field);
-        }
-      });
+  const required = [
+    ...(requiredMap[type] || []),
+    ...alwaysRequired
+  ];
 
-      if (missing.length > 0) {
-        e.preventDefault();
-        alert('❌ Please upload all required documents before continuing.');
-      }
-    });
-    </script>
+  for (const doc of required) {
+    const pathInput = document.querySelector(`[name="${doc.path}"]`);
+    const fileInput = document.getElementById(doc.file);
 
-        <script>
-    document.querySelector('form').addEventListener('submit', function (e) {
-      const type = <?= json_encode($type) ?>;
+    const hasSavedPath =
+      pathInput && pathInput.value && pathInput.value !== '__REMOVE__';
 
-      const required = [];
+    const hasNewFile =
+      fileInput && fileInput.files && fileInput.files.length > 0;
 
-      if (type === 'new') {
-        required.push('bodypic_path');
-      }
-      if (type === 'renew') {
-        required.push('old_pwd_id_path');
-      }
-      if (type === 'lost') {
-        required.push('affidavit_loss_path');
-      }
-
-      // Always required
-      required.push('barangaycert_path', 'medicalcert_path');
-
-      for (const id of required) {
-        const field = document.getElementById(id);
-        if (!field || !field.value || field.value === '__REMOVE__') {
-          e.preventDefault();
-          alert('⚠️ Please upload all required documents.');
-          return;
-        }
-      }
-    });
-    </script>
+    if (!hasSavedPath && !hasNewFile) {
+      e.preventDefault();
+      alert(`⚠️ Please upload required document: ${doc.file}`);
+      return;
+    }
+  }
+}); 
+</script>
 
 
 
