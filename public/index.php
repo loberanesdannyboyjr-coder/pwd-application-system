@@ -195,7 +195,7 @@ $isLoggedIn = isset($_SESSION['applicant_id']);
       <p><img src="../assets/pictures/check.png" alt="Check" class="w-4 h-4 inline-block" /> Update form</p>
       <p><img src="../assets/pictures/check.png" alt="Check" class="w-4 h-4 inline-block" /> Upload old PWD ID</p>
       <p><img src="../assets/pictures/check.png" alt="Check" class="w-4 h-4 inline-block" /> Updated Barangay Certificate of Residency / Indigency</p>
-      <p><img src="../assets/pictures/check.png" alt="Check" class="w-4 h-4 inline-block" /> UpdatedDoctor's Referral / Medical Certificate</p>
+      <p><img src="../assets/pictures/check.png" alt="Check" class="w-4 h-4 inline-block" /> Updated Doctor's Referral / Medical Certificate</p>
       <p><img src="../assets/pictures/check.png" alt="Check" class="w-4 h-4 inline-block" /> Updated 1x1 ID picture</p>
     </div>
 
